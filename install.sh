@@ -45,9 +45,21 @@ die()  { printf '[x] %s\n' "$*" >&2; exit 1; }
 # 255 专门表示「没有构建产物，没法打包」，CI 里据此区分「打包失败」与「没编就打包」
 die255() { printf '[x] %s\n' "$*" >&2; exit 255; }
 
-# 非 0 退出时补一行「失败于阶段」，不改变退出码
+# 非 0 退出时补一行「失败于阶段」，不改变退出码。
+# IQDX_DEBUG=1 时再打一份现场（CI 上「exit 1 加一句日志都没有」最难查：
+# 到底是权限、磁盘满、还是文件没生成）。
 trap 'iqdx_rc=$?; if [ "$iqdx_rc" -ne 0 ]; then
         printf "[x] 退出码 %s，失败于阶段「%s」\n" "$iqdx_rc" "$STAGE" >&2
+        if [ -n "${IQDX_DEBUG:-}" ]; then
+            { uname -a; id; } >&2 || true
+            df -h . /tmp >&2 || true
+            # 每条都 || true：trap 里再有命令失败会把 255 盖成 1
+            { [ -n "${DIST_DIR:-}" ] && [ -d "$DIST_DIR" ] &&
+                ls -l "$DIST_DIR" 2>&1 | head -n 20 >&2; } || true
+            { [ -n "${UPSTREAM_DIR:-}" ] && [ -d "$UPSTREAM_DIR/build/us_pc" ] &&
+                ls -l "$UPSTREAM_DIR/build/us_pc" 2>&1 | head -n 20 >&2; } || true
+            true
+        fi
       fi' EXIT
 
 usage() {

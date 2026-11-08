@@ -140,9 +140,13 @@ jobs:
       # aarch64 拆成两步打：坏在 deb 还是 zip，一眼就看出来。
       # （`-p all` 在 Linux 上会一次跑 deb/rpm/arch/zip，出错只剩一个 exit code）
       - name: 打包 .deb
+        env:
+          IQDX_DEBUG: 1
         run: sh install.sh -po -p deb --path build-iquedx/upstream
 
       - name: 打包便携 zip
+        env:
+          IQDX_DEBUG: 1
         run: sh install.sh -po -p zip --path build-iquedx/upstream
 
       - name: 打包 Arch（官方 archlinux 镜像没有 arm64，用 menci/archlinuxarm）
