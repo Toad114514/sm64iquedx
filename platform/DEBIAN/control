@@ -1,0 +1,7 @@
+Package: sm64coopdx-iquedx
+Version: 1.5.1
+Section: games
+Priority: optional
+Architecture: amd64
+Maintainer: Toad114514 <xiaolan2332021@163.com>
+Description: Super Mario 64 Co-op Deluxe with IQue Rom Support
