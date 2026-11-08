@@ -36,7 +36,7 @@ as_root() {
     elif command -v sudo >/dev/null 2>&1; then
         sudo "$@"
     else
-        echo "需要 root 权限写入 $appdir（没有 sudo）" >&2
+        echo "需要 root 权限写入 ${appdir}（没有 sudo）" >&2
         exit 1
     fi
 }

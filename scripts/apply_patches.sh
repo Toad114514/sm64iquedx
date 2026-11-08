@@ -76,7 +76,7 @@ for f in "$MAIN" "$FRONT" "$P/cn_extra"; do
     [ -e "$f" ] || { echo "缺少 $f" >&2; exit 1; }
 done
 if [ -n "$platform" ] && [ ! -f "$platform" ]; then
-    echo "缺少 $platform，先跑 gen_platform_patches.py" >&2
+    echo "缺少 ${platform}，先跑 gen_platform_patches.py" >&2
     exit 1
 fi
 
@@ -85,14 +85,14 @@ apply_patch() {
     shift
     name=$(basename "$patch")
     if [ ! -s "$patch" ]; then
-        echo "  跳过 $name（空补丁）"
+        echo "  跳过 ${name}（空补丁）"
         return
     fi
     if (cd "$upstream" && git apply --check -p1 "$@" "$patch") 2>/dev/null; then
         (cd "$upstream" && git apply -p1 "$@" "$patch")
         echo "  应用 $name"
     elif (cd "$upstream" && git apply -R --check -p1 "$@" "$patch") 2>/dev/null; then
-        echo "  跳过 $name（已应用）"
+        echo "  跳过 ${name}（已应用）"
     else
         echo "错误: $name 无法干净应用，上游不是 upstream.txt 声明的基线？" >&2
         exit 1

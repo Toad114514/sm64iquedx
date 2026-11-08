@@ -121,7 +121,7 @@ clone_at() {
     git -C "$c_dir" init -q
     git -C "$c_dir" remote add origin "$c_url"
 
-    info "拉取 $c_url @ ${c_commit%?????????}（$c_commit）"
+    info "拉取 $c_url @ ${c_commit%?????????}（${c_commit}）"
     if git -C "$c_dir" fetch -q --depth 1 origin "$c_commit" 2>/dev/null; then
         git -C "$c_dir" checkout -q FETCH_HEAD
     else
@@ -199,7 +199,7 @@ build_pc() {
         b_make=gmake
     fi
 
-    step "编译（$b_make -j$jobs）"
+    step "编译（$b_make -j${jobs}）"
     if [ "$(uname -s)" = Darwin ]; then
         # 走 Makefile 自带的 .app 打包路径（USE_APP 默认 1）：只有它会用
         # install_name_tool 把 SDL2 / GLEW 的 dylib 拷进 Contents/MacOS 并改写
@@ -231,7 +231,7 @@ build_android() {
     if command -v gmake >/dev/null 2>&1; then
         a_make=gmake
     fi
-    info "$a_make TOUCH_CONTROLS=1 -j$a_jobs（生成资源）"
+    info "$a_make TOUCH_CONTROLS=1 -j${a_jobs}（生成资源）"
     ( cd "$a_up" && $a_make TOUCH_CONTROLS=1 -j"$a_jobs" )
 
     # Gradle 工程根目录：上游现在把工程放在 platform/（platform/build.gradle 里
@@ -283,7 +283,7 @@ collect_dist() {
     # 所以这里把两个目录摊平合并成 dist/，既自包含又能再打成 .app。
     c_src=""
     if [ -d "$c_build/sm64coopdx.app/Contents/MacOS" ]; then
-        step "收集成品到 $DIST_DIR（从 sm64coopdx.app 摊平）"
+        step "收集成品到 ${DIST_DIR}（从 sm64coopdx.app 摊平）"
         c_src="$c_build/sm64coopdx.app/Contents/MacOS"
     else
         step "收集成品到 $DIST_DIR"
@@ -413,7 +413,7 @@ do_package() {
             info "  sudo sh $repo/platform/freedesktop/install.sh"
             ;;
         *)
-            die "未知的打包方式：$p_way（auto|all|deb|rpm|arch|mac|other|no）"
+            die "未知的打包方式：${p_way}（auto|all|deb|rpm|arch|mac|other|no）"
             ;;
     esac
 }

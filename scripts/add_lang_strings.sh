@@ -58,12 +58,12 @@ insert_after() {
 
     n=$(grep -n "^$anchor" "$file" | head -1 | cut -d: -f1)
     if [ -z "$n" ]; then
-        echo "错误: $file 里找不到锚点 $anchor，不敢猜插入位置" >&2
+        echo "错误: $file 里找不到锚点 ${anchor}，不敢猜插入位置" >&2
         exit 1
     fi
 
     if [ "$check" = yes ]; then
-        echo "  待插入 $key（第 $((n + 1)) 行，$anchor 之后）$file"
+        echo "  待插入 ${key}（第 $((n + 1)) 行，$anchor 之后）$file"
         changed=$((changed + 1))
         return 0
     fi

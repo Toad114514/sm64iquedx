@@ -52,7 +52,7 @@ if grep -q '^--- a/lang/' "$FRONT_PATCH"; then
 fi
 n=$(grep -c '^--- a/' "$FRONT_PATCH" || true)
 if [ "$n" -ne 1 ] || ! grep -q "^--- a/$FRONTEND$" "$FRONT_PATCH"; then
-    echo "错误: 0002 应只含 $FRONTEND，实际含 $n 个文件" >&2
+    echo "错误: 0002 应只含 ${FRONTEND}，实际含 $n 个文件" >&2
     exit 1
 fi
 echo "✅ 0001 核心 / 0002 前端分工正确；语言字符串由脚本插入" >&2

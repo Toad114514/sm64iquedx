@@ -80,7 +80,7 @@ while IFS= read -r f; do
     rc=0
     diff -u --label "a/$rel" --label "b/$rel" "$target" "$f" >> "$work/out.patch" || rc=$?
     if [ "$rc" -ge 2 ]; then
-        echo "错误: $rel 生成 diff 失败（rc=$rc）" >&2
+        echo "错误: $rel 生成 diff 失败（rc=${rc}）" >&2
         exit 1
     fi
     echo "  M $rel" >&2
@@ -92,7 +92,7 @@ done < "$work/list"
 mkdir -p "$(dirname "$out")"
 cat "$work/out.patch" > "$out"
 if [ "$count" -gt 0 ]; then
-    echo "已生成 $out（$count 个文件）" >&2
+    echo "已生成 ${out}（$count 个文件）" >&2
 else
     echo "筛出的文件与基线一致，$out 置空" >&2
 fi
