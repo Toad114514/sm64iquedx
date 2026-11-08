@@ -89,10 +89,21 @@ sh install.sh -po -p all --path build-iquedx/upstream        # 只打包
 
 ### GitHub Actions
 
-- `.github/workflows/build-desktop.yml` —— Linux / Windows / macOS 三平台，默认参数 `-c -f -d`。Linux 编译完后再用 `-po -p all` 出 `.deb` / `.rpm` / 便携 zip，Arch 包另外进 `archlinux` 容器里跑 `makepkg`。**产物按格式拆成独立 artifact**（`-deb` / `-rpm` / `-arch` / `-portable`），不再是一个大 zip 里套一层 `dist/`。
+- `.github/workflows/build-desktop.yml` —— 三平台 × 两套架构，共五个 job，默认参数 `-c -f -d`：
+
+  | job | runner | 架构 | 产物 |
+  |---|---|---|---|
+  | `linux` | `ubuntu-22.04` | x86_64 | deb / rpm / arch / portable-zip |
+  | `linux-arm` | `ubuntu-22.04-arm` | aarch64 | deb / arch / portable-zip（不出 rpm） |
+  | `windows` | `windows-latest` | x86_64 | portable-zip |
+  | `macos` | `macos-latest` | arm64 | dmg / portable-zip |
+  | | `macos-15-intel` | x86_64 | dmg / portable-zip |
+
+  编译完再用 `-po -p all` 出包。Arch 包需要 `makepkg`：x86_64 进 `archlinux:latest`，aarch64 进 `menci/archlinuxarm:base-devel`（官方 archlinux 镜像只有 x86_64），宿主机不需要装 Arch。**产物按格式拆成独立 artifact 且名字带架构**（如 `sm64iquedx-linux-aarch64-deb`），不再是一个大 zip 里套一层 `dist/`。
+- Intel Mac 的 runner 只到 2027 年秋（GitHub 说届时停止支持 x86_64 macOS），那之后这一腿要删掉。
 - `.github/workflows/build-android.yml` —— 默认参数 `-a -c -f -d`，装 SDK 33 + build-tools 33.0.2，跑完 `make TOUCH_CONTROLS=1` 再 `gradlew assembleRelease`，用上游自带证书签名后上传 APK。
 
-两个 workflow 都会先跑 `scripts/test_install_args.sh`(51 项，离线) 当门禁。
+两个 workflow 都会先跑 `scripts/test_install_args.sh`(52 项，离线) 当门禁。
 自测不依赖宿主机的打包工具（`dpkg-deb` / `rpmbuild` / `makepkg` 都有桩），所以三平台结果一致。
 
 也可以 fork 后用 GitHub Actions 自己编译，或到上善若的汉化群 https://qm.qq.com/q/twjhRVjgWs 找我要成品 *（为控制国内马里奥圈小鬼数量不直接发布）*。

@@ -3,7 +3,7 @@
 #
 #   sh platform/portable/mkzip.sh [成品目录] [版本]
 #
-# 成品目录默认 <仓库>/dist；输出 <仓库>/sm64iquedx-<版本>-<系统>-portable.zip。
+# 成品目录默认 <仓库>/dist；输出 <仓库>/sm64iquedx-<版本>-<系统>-<架构>-portable.zip。
 # 和 deb/rpm/arch 一样，包本身放在仓库根，不放进 dist/ —— 否则下次打包会把
 # 上一次的 zip 一起装进去（deb 里出现 deb）。
 set -eu
@@ -33,7 +33,9 @@ case "$(uname -s)" in
     *)                     os=linux ;;
 esac
 
-out=$repo/sm64iquedx-${version}-${os}-portable.zip
+# 文件名带架构：x86_64 和 aarch64 的包同名的话，下载下来分不清
+arch=$(uname -m)
+out=$repo/sm64iquedx-${version}-${os}-${arch}-portable.zip
 rm -f "$out"
 
 # -q 安静、-r 递归；在成品目录里 . 打进去，解压出来就是一层平铺的文件

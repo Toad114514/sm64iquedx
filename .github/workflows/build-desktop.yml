@@ -1,17 +1,21 @@
 name: Build Desktop
 
-# 桌面三平台：Linux / Windows / macOS。
+# 桌面三平台 × 两套架构 = 五个 job：
+#   linux      ubuntu-22.04       x86_64  → deb / rpm / arch / portable-zip
+#   linux-arm  ubuntu-22.04-arm   aarch64 → deb / arch / portable-zip（不出 rpm）
+#   windows    windows-latest     x86_64  → portable-zip
+#   macos      macos-latest       arm64   → dmg / portable-zip
+#            + macos-15-intel     x86_64  → dmg / portable-zip
+#
 # 统一流程：sh install.sh -c -f -d -p no  →  sh install.sh -po -p all  → 上传。
 #   -c 汉化上游  -f 前端补丁  -d djui_modern
 #   -p no   只编译，不打任何格式的包
 #   -po     只打包（跳过克隆/补丁/编译，直接吃上一步留下的 build-iquedx/upstream）
 #
-# 产物按格式拆成独立 artifact（不要一个几百 MB 的 zip 里套 dist/）：
-#   linux   → deb / rpm / arch / portable-zip
-#   windows → portable-zip
-#   macos   → dmg / portable-zip
-# arch 包在 ubuntu 上没法打（没有 makepkg），所以多一步 docker + archlinux 容器。
-# Linux 上 -po -p all 会依次尝试 deb / rpm / arch，缺工具只警告不中断。
+# 产物按格式拆成独立 artifact（不要一个几百 MB 的 zip 里套 dist/），名字里带架构，
+# 因为同一个系统的两种架构会产出同名文件。
+# Arch 包需要 makepkg：x86_64 进 archlinux:latest，aarch64 进 menci/archlinuxarm
+# （官方 archlinux 镜像只有 x86_64）。两者都在容器里跑，宿主机不需要 Arch。
 
 on:
   workflow_dispatch:
@@ -26,7 +30,7 @@ concurrency:
 
 jobs:
   linux:
-    name: Linux (deb / rpm / arch / zip)
+    name: Linux x86_64 (deb / rpm / arch / zip)
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -34,7 +38,7 @@ jobs:
       - name: 安装依赖
         run: |
           sudo apt-get update
-          # rpm 提供 rpmbuild；包一层是给 -po -p all 的 rpm 分支用的
+          # rpm 提供 rpmbuild；只给 -po -p all 的 rpm 分支用
           sudo apt-get install -y --no-install-recommends \
             build-essential git python3 zip \
             libglew-dev libsdl2-dev libz-dev libcurl4-openssl-dev \
@@ -57,7 +61,7 @@ jobs:
               # 新容器第一次用 pacman 必须先建 keyring，否则包签名校验直接失败
               pacman-key --init >/dev/null
               pacman-key --populate archlinux >/dev/null
-              pacman -Sy --noconfirm --needed base-devel git >/dev/null
+              pacman -Sy --noconfirm --needed base-devel >/dev/null
               # makepkg 拒绝 root
               useradd -m builder
               chown -R builder /w
@@ -73,7 +77,7 @@ jobs:
       - name: 上传 .deb
         uses: actions/upload-artifact@v4
         with:
-          name: sm64iquedx-linux-deb
+          name: sm64iquedx-linux-x86_64-deb
           if-no-files-found: error
           retention-days: 14
           path: |
@@ -83,7 +87,7 @@ jobs:
       - name: 上传 .rpm
         uses: actions/upload-artifact@v4
         with:
-          name: sm64iquedx-linux-rpm
+          name: sm64iquedx-linux-x86_64-rpm
           if-no-files-found: error
           retention-days: 14
           path: |
@@ -93,7 +97,7 @@ jobs:
       - name: 上传 Arch 包
         uses: actions/upload-artifact@v4
         with:
-          name: sm64iquedx-linux-arch
+          name: sm64iquedx-linux-x86_64-arch
           if-no-files-found: error
           retention-days: 14
           path: |
@@ -103,7 +107,83 @@ jobs:
       - name: 上传便携 zip
         uses: actions/upload-artifact@v4
         with:
-          name: sm64iquedx-linux-portable
+          name: sm64iquedx-linux-x86_64-portable
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            *.zip
+            dist/*.zip
+
+  linux-arm:
+    # GitHub 的 arm64 标准 runner（公开仓库免费）。用 22.04 是为了和 x86_64 那个
+    # job 的编译器版本一致，少一个「24.04 的 gcc 报新警告」的变量。
+    name: Linux aarch64 (deb / arch / zip)
+    runs-on: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          # 不装 rpm：aarch64 只出 deb / pacman / portable-zip，
+          # -po -p all 的 rpm 分支会因为找不到 rpmbuild 自动跳过并警告。
+          sudo apt-get install -y --no-install-recommends \
+            build-essential git python3 zip \
+            libglew-dev libsdl2-dev libz-dev libcurl4-openssl-dev
+
+      - name: 参数自测（离线）
+        run: sh scripts/test_install_args.sh
+
+      - name: 编译
+        run: sh install.sh -c -f -d -p no
+
+      - name: 打包（只用已有构建产物）
+        run: sh install.sh -po -p all --path build-iquedx/upstream
+
+      - name: 打包 Arch（官方 archlinux 镜像没有 arm64，用 menci/archlinuxarm）
+        run: |
+          docker run --rm \
+            -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
+            -v "$PWD:/w" -w /w menci/archlinuxarm:base-devel bash -euc '
+              # 镜像里已经装好 base-devel（含 makepkg / fakeroot / zstd），
+              # 不需要再动 pacman；-po 分支也不要求 git。
+              useradd -m builder
+              chown -R builder /w
+              su builder -c "sh install.sh -po -p arch --path build-iquedx/upstream"
+              chown -R "$HOST_UID:$HOST_GID" /w
+            '
+
+      - name: 列出产物
+        run: |
+          echo "== 安装包 =="
+          ls -la ./*.deb ./*.pkg.tar.* ./*.zip 2>/dev/null || true
+          echo "== deb 架构字段 =="
+          dpkg-deb -f ./*.deb Architecture 2>/dev/null || true
+
+      - name: 上传 .deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: sm64iquedx-linux-aarch64-deb
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            *.deb
+            dist/*.deb
+
+      - name: 上传 Arch 包
+        uses: actions/upload-artifact@v4
+        with:
+          name: sm64iquedx-linux-aarch64-arch
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            *.pkg.tar.*
+            dist/*.pkg.tar.*
+
+      - name: 上传便携 zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: sm64iquedx-linux-aarch64-portable
           if-no-files-found: error
           retention-days: 14
           path: |
@@ -146,7 +226,7 @@ jobs:
       - name: 上传便携 zip
         uses: actions/upload-artifact@v4
         with:
-          name: sm64iquedx-windows-portable
+          name: sm64iquedx-windows-x86_64-portable
           if-no-files-found: error
           retention-days: 14
           path: |
@@ -154,8 +234,21 @@ jobs:
             dist/*.zip
 
   macos:
-    name: macOS (dmg / zip)
-    runs-on: macos-latest
+    # 一个矩阵同时出 Apple Silicon 与 Intel：
+    #   macos-latest   → arm64（M1，brew 前缀 /opt/homebrew）
+    #   macos-15-intel → x86_64（brew 前缀 /usr/local）
+    # macos-13 已于 2025-12-04 下线；macos-15-intel 是 GitHub 最后一个 Intel 镜像，
+    # 官方说 2027 年秋停止支持 x86_64 macOS，届时这个腿要删掉。
+    name: macOS ${{ matrix.arch }} (dmg / zip)
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
     steps:
       - uses: actions/checkout@v4
 
@@ -171,14 +264,16 @@ jobs:
 
       - name: 编译
         env:
+          # Intel runner 的 brew 前缀是 /usr/local，两个都放上，别写死 /opt/homebrew
           PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig
         run: sh install.sh -c -f -d -p no
 
-      - name: 检查 .app 自包含（不能链回 /opt/homebrew）
+      - name: 检查 .app 自包含（不能链回 brew）
         run: |
           app=build-iquedx/upstream/build/us_pc/sm64coopdx.app/Contents/MacOS
           ls -l "$app"
-          bad=$(otool -L "$app/sm64coopdx" | grep -E '/opt/homebrew|/usr/local' || true)
+          brew_prefix=$(brew --prefix)
+          bad=$(otool -L "$app/sm64coopdx" | grep -E "$brew_prefix/(lib|opt)" || true)
           if [ -n "$bad" ]; then
             echo "::error::可执行文件还链着 brew 里的库（换台机器跑不起来）："
             printf '%s\n' "$bad"
@@ -190,6 +285,7 @@ jobs:
               exit 1
             fi
           done
+          file "$app/sm64coopdx"
 
       - name: 打包（app + dmg，含 ad-hoc 签名）
         run: sh install.sh -po -p all --path build-iquedx/upstream
@@ -202,7 +298,7 @@ jobs:
       - name: 上传 .dmg
         uses: actions/upload-artifact@v4
         with:
-          name: sm64iquedx-macos-dmg
+          name: sm64iquedx-macos-${{ matrix.arch }}-dmg
           if-no-files-found: error
           retention-days: 14
           path: |
@@ -212,7 +308,7 @@ jobs:
       - name: 上传便携 zip
         uses: actions/upload-artifact@v4
         with:
-          name: sm64iquedx-macos-portable
+          name: sm64iquedx-macos-${{ matrix.arch }}-portable
           if-no-files-found: error
           retention-days: 14
           path: |

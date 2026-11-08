@@ -469,7 +469,8 @@ do_package() {
                 die "PKGBUILD 写死读取 $repo/dist，--dist 指到别处时无法用 arch 打包"
             fi
             command -v makepkg >/dev/null 2>&1 || die "缺少 makepkg（pacman 包）"
-            ( cd "$repo/platform/pacman" && makepkg -f --nodeps )
+            # PKGBUILD 的 pkgver 是 ${IQDX_VERSION:-默认值}，让包版本跟 upstream.txt 走
+            ( cd "$repo/platform/pacman" && IQDX_VERSION="$VERSION" makepkg -f --nodeps )
             for f in "$repo"/platform/pacman/*.pkg.tar.*; do
                 [ -f "$f" ] || continue
                 cp "$f" "$repo/"
@@ -638,7 +639,11 @@ while [ $# -gt 0 ]; do
 done
 
 # ── 准备 ─────────────────────────────────────────────────────────────────────
-command -v git >/dev/null 2>&1 || die "需要 git"
+# -po 只打包：不 clone、不打补丁，压根用不到 git。容器镜像里（archlinux 之类）
+# 常常只装了 base-devel 而没有 git，不该因此拒绝打包。
+if [ "$PACKAGE_ONLY" != yes ]; then
+    command -v git >/dev/null 2>&1 || die "需要 git"
+fi
 
 DJMD_REPO=$(upstream_value djmd_repo)
 DJMD_COMMIT=$(upstream_value djmd_commit)

@@ -364,6 +364,13 @@ else
     no "-po -a：rc=${rc_a}，dist=$(ls "$C/dist-po-a" 2>/dev/null | tr '\n' ' ')"
 fi
 
+# C11: 便携 zip 的文件名必须带架构 —— x86_64 与 aarch64 的包同名的话，
+#      下载下来根本分不清该给自己哪台机器用。
+zout=$(PATH="$S/bin:$PATH" sh "$C/platform/portable/mkzip.sh" "$C/dist" 9.9.9 2>&1)
+printf '%s\n' "$zout" | grep -q "9.9.9-[a-z]*-$(uname -m)-portable.zip" \
+    && ok "便携 zip：文件名带架构（$(uname -m)）" \
+    || no "便携 zip：文件名不对 → $(printf '%s\n' "$zout" | tail -n 1)"
+
 say_section "D. 可移植性静态检查"
 
 # D1: `$var` 紧贴非 ASCII 字符时必须写成 `${var}`。

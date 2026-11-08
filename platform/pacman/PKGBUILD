@@ -8,7 +8,7 @@
 # 因此 source=() 为空、sha256sums=() 也为空 —— 没有需要下载校验的源码。
 
 pkgname=sm64coopdx-iquedx
-pkgver=1.5.1
+pkgver=${IQDX_VERSION:-1.5.1}
 pkgrel=1
 pkgdesc="带神游（iQue）简体中文文本包的 Super Mario 64 Co-op Deluxe"
 arch=('x86_64' 'aarch64')

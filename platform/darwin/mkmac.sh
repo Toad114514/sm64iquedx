@@ -6,9 +6,12 @@
 # 成品目录默认 <仓库根>/dist，里面应当有构建产物 sm64coopdx。
 # 产物默认放在 <仓库根>：
 #   SM64CoopDeluxe.app                        （--app-only / 没有 hdiutil 时）
-#   sm64coopdx-iquedx_<版本>_macos.dmg        （默认，需要 macOS 的 hdiutil）
-#   sm64coopdx-iquedx_<版本>_macos.zip        （--zip，任何系统都能打）
-#   sm64coopdx-iquedx-<版本>.pkg              （--pkg，需要 pkgbuild）
+#   sm64coopdx-iquedx_<版本>_macos-<架构>.dmg （默认，需要 macOS 的 hdiutil）
+#   sm64coopdx-iquedx_<版本>_macos-<架构>.zip （--zip，任何系统都能打）
+#   sm64coopdx-iquedx_<版本>_<架构>.pkg       （--pkg，需要 pkgbuild）
+#
+# 名字里带架构（arm64 / x86_64）：Apple Silicon 和 Intel 两个 job 都产 dmg，
+# 同名的话下载下来分不清哪个能在自己机器上跑。
 #
 # 为什么把整个成品目录塞进 Contents/MacOS：游戏是按「可执行文件同目录下有 res/、
 # lang/、*.ini」找资源的，把这些挪进 Contents/Resources 就得改代码，所以保持平铺。
@@ -28,7 +31,7 @@ for arg in "$@"; do
         --zip)      mode=zip;;
         --pkg)      mode=pkg;;
         --dmg)      mode=dmg;;
-        -h|--help)  sed -n '2,16p' "$0"; exit 0;;
+        -h|--help)  sed -n '2,18p' "$0"; exit 0;;
         -*)         echo "未知参数：$arg" >&2; exit 2;;
         *)
             if [ -z "$dist" ]; then dist=$arg
@@ -41,6 +44,9 @@ done
 
 dist=${dist:-$repo/dist}
 version=${version:-1.5.1}
+
+# uname -m：Apple Silicon 上是 arm64，Intel 上是 x86_64
+arch=$(uname -m)
 
 if [ ! -x "$dist/sm64coopdx" ]; then
     echo "找不到构建产物：$dist/sm64coopdx" >&2
@@ -155,7 +161,7 @@ case "$mode" in
         exit 0
         ;;
     zip)
-        zipout=$repo/sm64coopdx-iquedx_${version}_macos.zip
+        zipout=$repo/sm64coopdx-iquedx_${version}_macos-${arch}.zip
         rm -f "$zipout"
         # ditto 能保留 macOS 的资源分支与权限；没有就退到普通 zip
         if command -v ditto >/dev/null 2>&1; then
@@ -173,7 +179,7 @@ case "$mode" in
             echo "缺少 pkgbuild（Xcode Command Line Tools），无法生成 .pkg" >&2
             exit 1
         fi
-        pkgout=$repo/sm64coopdx-iquedx-${version}.pkg
+        pkgout=$repo/sm64coopdx-iquedx_${version}_${arch}.pkg
         rm -f "$pkgout"
         # --component 会把 .app 原样装进 /Applications 并保留包结构
         pkgbuild --component "$app" \
@@ -195,7 +201,7 @@ case "$mode" in
         trap 'rm -rf "$stage"' EXIT INT TERM
         cp -a "$app" "$stage/"
         ln -s /Applications "$stage/Applications"
-        dmg=$repo/sm64coopdx-iquedx_${version}_macos.dmg
+        dmg=$repo/sm64coopdx-iquedx_${version}_macos-${arch}.dmg
         rm -f "$dmg"
         hdiutil create -quiet -volname "SM64 Coop Deluxe (iQue)" \
             -srcfolder "$stage" -ov -format UDZO "$dmg"
