@@ -30,37 +30,62 @@ Super Mario 64 (Ch) (iQue) \[\!\]：`29047fba820695bd14c5bd7aa1aa4400`
  - 支持生成特定系统的软件包
 
 ## 编译
+
 ```bash
-git clone https://github.com/toad114514/ique-deluxe --depth 1
-cd ique-deluxe
+git clone https://github.com/toad114514/sm64iquedx --depth 1
+cd sm64iquedx
 
-# 根据系统选择执行的文件
-sh ./install.sh             # For Linux/MacOS
-./install.bat               # For Windows NT (目前没有)
+# 不带参数 = 交互式向导（需要终端）
+sh ./install.sh
 
-sh ./install.sh -h          # For Linux/MacOS 可用的参数选项
+# 也可以直接用参数，不再提问
+sh ./install.sh -h                        # 看全部选项
+sh ./install.sh -f -p deb                 # 带前端开关，生成 .deb
+sh ./install.sh -c -f -p rpm              # 汉化上游 + 前端 + .rpm
+sh ./install.sh -d -f -p mac              # 带 djui_modern，出 .app / .dmg
+sh ./install.sh -a -c                     # 只构建 Android 汉化版 APK
 ```
 
-这会先打开一个交互式的 TUI 界面询问构建产物需要：
- 1. 上游版本：`coop-deluxe/sm64coopdx` 或者 `Shangshanruo66958/sm64coopdx-Chinese`
- 2. 是否应用 UIPatch 补丁（`patches/0002-djui-frontend.patch`），一般情况下不应用 UIPatch 补丁时只能通过修改配置文件修改，应用后可以在 设置 -> 其他 -> 神游汉化 中进行便捷修改
- 3. 是否应用 djui_modern 补丁，这是由上善若制作的现代化 Djoslin's UI 模块，详细可查看 [This](https://github.com/Shangshanruo666/djui_modern)，应用后本补丁也会根据其补丁做兼容
+`install.sh` 做的事（顺序固定）：
 
-`install.sh` 还包括一些别的问题：
- 1. 询问是否构建安卓版本，勾选后将不再生成任何PC构建，只构建 Android。请注意编译本机必须安装了 Android NDK 与 Gradle 依赖才可编译
- 2. 询问是否需要生成安装包，可根据平台生成对应的软件包
-    - Debian 系 Linux 将生成 `sm64coopdx-iquedx_<版本>_<架构>.deb` 的软件包并使用 apt 安装
-    - Arch 系 Linux 将通过 `makepkg -si` 生成 `sm64coopdx-iquedx-<版本>-<rel>-<架构>.pkg.tar.zst` 的软件包并使用 pacman 安装
-      - 本来想提交到 AUR 的然后最近好像不给注册开放没办法了，目前还不能 `yay -S sm64coopdx-iquedx`
-    - 红帽系 Linux 将生成 `sm64coopdx-iquedx-<版本>-<rel>.<架构>.rpm` 并使用 dnf 安装（`platform/rpm/mkrpm.sh`，依赖按 Fedora/openSUSE 分支写死，不走自动依赖）
-    - MacOS 系将打成 `SM64CoopDeluxe.app`，默认再包一层 `.dmg`（`--pkg` 出 `.pkg`、`--zip` 出 zip，`--app-only` 只出 app）（`platform/darwin/mkmac.sh`）
-    - 其他 Linux 发行版 和 Unix-Like 默认将构建产物放在 `/opt/sm64coopdx-iquedx` 下，上述所有软件包应用本体也是在这个路径，也可自定义位置
+1. 按 `upstream.txt` 克隆上游并**检查目录结构**（`src/game`、`src/pc`、`src/pc/djui`、`text`、`lang`）；
+2. `-d` 时先挂 djui_modern（必须早于本体补丁）；
+3. `scripts/apply_patches.sh` 打 `0001` → Android 平台增量（`0005`/`0006`）→ `-f` 时的 `0002` → 铺 `patches/cn_extra`（只补缺）→ `scripts/add_lang_strings.sh` 补语言字符串；
+4. 编译（桌面走 `make`，macOS 加 `OSX_BUILD=1`；`-a` 走 Gradle 出 APK）；
+5. 收集运行期成品到 `dist/`，再按 `-p` 交给 `platform/` 打包。
 
-`install.bat` 还包括别的问题：
-  1. 是否选择使用软件打包程序打包，这将使用一个软件打包程序来打包 exe 文件生成安装向导，默认的安装路径在 `C:\Program Files\sm64coopdx-iquedx` （没做aaa）
+常用参数：
 
-如果嫌麻烦，你也可以将仓库 fork 后使用 Github Action 自己编译  
-或上善若的汉化群 https://qm.qq.com/q/twjhRVjgWs 来找我获取编译成品 *（为控制国内马里奥圈小鬼数量不能直接发布成品）*
+| 参数 | 作用 |
+| --- | --- |
+| `-a, --android` | 只构建 Android APK（需要 NDK + Gradle），不做桌面打包 |
+| `-c, --chinese` | 用汉化版上游（PC 用 `cn-repo`，Android 用 `android-cn-repo`） |
+| `-f, --frontend` | 应用 `patches/0002-djui-frontend.patch`，在 设置 → 其他 → 神游汉化 里加开关；不应用时只能改配置文件 |
+| `-d, --djmd` | 应用 [djui_modern](https://github.com/Shangshanruo666/djui_modern) 模块（本仓库补丁已与其兼容） |
+| `-p, --package <方式>` | `auto` / `deb` / `rpm` / `arch` / `mac` / `other` / `no`；不写就不打包 |
+| `-o, --path <目录>` | 上游 checkout 位置，默认 `build-iquedx/upstream` |
+| `--dist <目录>` | 成品目录，默认 `dist/`（arch 打包写死读 `dist/`） |
+| `-V, --version <版本>` | 包版本号，默认读 `upstream.txt` 的 `version` |
+| `-n, --print-config` | 只解析参数并打印最终配置，不克隆/不编译；核对参数是否传对 |
+
+参数自测（离线，桩掉 git/make/gradle，不联网不编译）：
+
+```bash
+sh scripts/test_install_args.sh    # 解析 + 错误路径 + 是否真的传到下游，共 37 项
+```
+
+打包产物：
+
+- Debian 系 → `sm64coopdx-iquedx_<版本>_<架构>.deb`（`dpkg -i`）
+- Arch 系 → `platform/pacman/` 下 `makepkg -f --nodeps` 出 `sm64coopdx-iquedx-<版本>-<rel>-<架构>.pkg.tar.zst`
+  - 本来想提交到 AUR 的，最近不给注册开放，所以目前还不能 `yay -S sm64coopdx-iquedx`
+- 红帽系 / openSUSE → `sm64coopdx-iquedx-<版本>-<rel>.<架构>.rpm`（`dnf` / `zypper`）
+- macOS → `SM64CoopDeluxe.app`，默认再包一层 `.dmg`（`--pkg` 出 `.pkg`、`--zip` 出 zip、`--app-only` 只出 app）
+- 其他 Linux / Unix → `--package other` 只提示安装命令，本体一律装在 `/opt/sm64coopdx-iquedx`
+
+Windows 目前只保证 `make` 能出 `sm64coopdx.exe`（MSYS2/MinGW），打包向导（`install.bat`）还没做。
+
+也可以 fork 后用 GitHub Actions 自己编译，或到上善若的汉化群 https://qm.qq.com/q/twjhRVjgWs 找我要成品 *（为控制国内马里奥圈小鬼数量不直接发布）*。
 
 ## 提交 Issue
 请使用 Github 的模板表单！否则任何 issue 一律忽略！

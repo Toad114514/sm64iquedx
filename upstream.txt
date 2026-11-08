@@ -1,8 +1,14 @@
 # 补丁基线
+#
+# 这里的键值被 install.sh 直接读取（`key = value`），改上游只要改这个文件。
+# 注意 `repo` 与 `cn-repo` 只差前缀，读取时按行首锚定，不会互相命中。
 
 # 原版 CoopDX / Super Mario 64 Co-op Deluxe        - main v1.5.1
 repo   = https://github.com/coop-deluxe/sm64coopdx
 commit = 8cd6e5977d9f920d51ca71f2c61801d019ed79c6
+# 打包用的版本号（Debian control / rpm spec / PKGBUILD 的默认值都从这里对齐）
+version = 1.5.1
+
 # Android Port by ManisCat2
 android = https://github.com/ManIsCat2/sm64coopdx
 android-commit = 99c8d21abe4d24649b508d0f216c4359ed5d2a7a

@@ -128,6 +128,7 @@ scripts/apply_patches.sh <pc|android|android-cn> <上游干净 checkout> [--fron
 | `gen_all_patches.sh <上游基线根目录>` | **改完 `src/` 后跑这个**，一次生成共用的 0001 / 0002 并断言分工 |
 | `gen_platform_patches.py --pc-base … --android … --android-cn …` | 重生成 0005 / 0006，内含三方合并、冲突消解与终态自检 |
 | `gen_patches.sh <上游根目录> [输出] [--only 前缀] [--exclude 前缀]` | 单个补丁生成器，按相对路径前缀筛选；`--only`/`--exclude` 可各重复多次（取并集） |
+| `test_install_args.sh` | `install.sh` 的参数自测：解析、错误路径、以及参数是否真的传到下游（桩掉 git/make/gradle，离线、不编译） |
 
 `gen_patches.sh` 的行为约定（已覆盖测试）：内容相同的文件跳过；`src/` 里有而基线上没有的文件直接报错（应改放 `patches/cn_extra/`）；含 NUL 字节的二进制直接报错（`diff` 对二进制只回一句「文件不同」且退出码仍为 1，不自己判会把这句话写进补丁）；筛不出差异时写一个空补丁文件而不是保留旧文件，应用器遇到空补丁会跳过。
 
@@ -135,7 +136,7 @@ scripts/apply_patches.sh <pc|android|android-cn> <上游干净 checkout> [--fron
 
 按平台 / 发行包分目录，放与具体构建环境相关的补丁或脚本。
 
-> ⚠️ `install.sh` **目前还没有调用这里的任何脚本**（`ique_patch_apply()` 仍是空的，也不构建/打包）。这些目录现在是「可用但未接线」：脚本可以手工跑，自动流程要等 `install.sh` 补完。
+> `install.sh` 在第 6 步按 `--package`（或向导里的选择）调用这里：`deb` → `DEBIAN/mkdeb.sh`、`rpm` → `rpm/mkrpm.sh`、`arch` → 在 `pacman/` 里跑 `makepkg`、`mac` → `darwin/mkmac.sh`、`other` → 只打印安装命令（`freedesktop/install.sh`）。
 
 | 目录 | 内容 | 说明 |
 | --- | --- | --- |
