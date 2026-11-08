@@ -21,6 +21,15 @@ dist/
 *.elf
 *.map
 
+# —— 打包产物 ——
+*.deb
+*.rpm
+*.dmg
+*.pkg
+*.AppImage
+*.app/
+*.pkg.tar.zst
+
 # —— 打补丁残留 ——
 *.rej
 *.orig

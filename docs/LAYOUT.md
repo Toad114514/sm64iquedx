@@ -140,6 +140,8 @@ scripts/apply_patches.sh <pc|android|android-cn> <上游干净 checkout> [--fron
 | --- | --- | --- |
 | `platform/DEBIAN/` | `control.in` + `mkdeb.sh` | Debian 包元数据与打包脚本 |
 | `platform/pacman/` | `PKGBUILD` + `.install` | Arch 包脚本 |
+| `platform/rpm/` | `sm64coopdx-iquedx.spec` + `mkrpm.sh` | Fedora / RHEL / openSUSE 的 RPM |
+| `platform/darwin/` | `Info.plist.in` + `mkmac.sh` | macOS 的 `.app` / `.dmg` / `.pkg` / `.zip` |
 | `platform/freedesktop/` | `*.desktop` + 图标 + `install.sh` | 非打包发行版共用：启动器与图标 |
 
 ### platform/DEBIAN
@@ -162,6 +164,45 @@ sh platform/DEBIAN/mkdeb.sh --print         # 只打印填好的 control，便�
 `PKGBUILD` **不自带源码**（`source=()`）：`install.sh` 已经把上游 + 补丁 + cn_extra
 组装并构建成 `<仓库根>/dist/`，这里只负责按 Arch 规范打包到 `/opt` 并附带启动器与图标。
 `pkgver` 必须与 `upstream.txt` 声明的上游版本对齐，改上游时记得同步。
+
+### platform/rpm
+
+同样**不自带源码**：成品在 `<仓库根>/dist/`。spec 里没有 `%prep` / `%build`，入口
+`mkrpm.sh` 先按目标布局铺一个 staging 目录（`opt/sm64coopdx-iquedx` +
+`usr/share/applications` + `usr/share/icons/…`），再用 `--define 'stage …'` 让 spec
+直接 `cp` 进 `%{buildroot}`：
+
+```sh
+sh platform/rpm/mkrpm.sh                 # 成品取 <仓库根>/dist，版本 1.5.1
+sh platform/rpm/mkrpm.sh <成品目录> <版本>
+sh platform/rpm/mkrpm.sh --print         # 不打包，只打印 staging 内容与将执行的 rpmbuild 命令
+```
+
+spec 里三个开关必须保持关闭：`debug_package`（没源码可分）、`__os_install_post`
+（含 strip 与 build-id 重链接，会改二进制）、`AutoReqProv`（自动依赖会写进构建机的
+库名，交叉打包就错）。依赖按 `%if 0%{?suse_version}` 分两支：openSUSE 用
+`libSDL2-2_0-0 / libglvnd / libz1 / libcurl4`，其余用 `SDL2 / mesa-libGL / zlib / libcurl`。
+需要 `rpmbuild`（Fedora `dnf install rpm-build`、openSUSE `zypper in rpm-build`）。
+
+### platform/darwin
+
+`mkmac.sh` 把成品目录**整体**塞进 `Contents/MacOS/`——游戏按「可执行文件同目录下有
+`res/`、`lang/`」找资源，挪进 `Resources/` 就得改代码；`Contents/Info.plist` 由
+`Info.plist.in` 填占位符生成：
+
+```sh
+sh platform/darwin/mkmac.sh <成品目录> <版本>          # 默认：.app + .dmg（需要 hdiutil）
+sh platform/darwin/mkmac.sh <成品目录> <版本> --zip    # 任意系统都能打 zip
+sh platform/darwin/mkmac.sh <成品目录> <版本> --pkg    # .pkg（需要 pkgbuild）
+sh platform/darwin/mkmac.sh <成品目录> <版本> --app-only
+```
+
+图标优先用 `sips` + `iconutil` 出整套尺寸；没有就退化成「把 256×256 PNG 塞进 icns
+的 `ic08` 块」（macOS 10.7+ 认 PNG 承载的 icns，只有一档尺寸）。有 `codesign` 时做
+ad-hoc 签名——**Apple Silicon 上未签名的 arm64 二进制会被内核直接拒绝**；这不是公证，
+网上下载的包仍会被 Gatekeeper 拦一次（右键 → 打开，或 `xattr -dr com.apple.quarantine`）。
+plist 校验在 Darwin 上用 `plutil -lint`，其它系统用 python3 的 `plistlib`——有些发行版
+也装了同名 `plutil`，那是 Swift 实现，读文件参数会误报。
 
 ### platform/freedesktop
 
@@ -202,5 +243,5 @@ DESTDIR=/tmp/stage sh platform/freedesktop/install.sh <目录>   # 装进 stagin
 - `patches/cn_extra/` 13 个上游不存在的文件：`cn_font`、`cn_tex`、`cn_data/*.h`、`cn_intro_data.c`、`text/cn_*.inc.c`、`src/pc/rom_checker_ique.cpp`、`lang/Chinese.ini`；均已用 `git cat-file -e 8cd6e59:<path>` 确认上游不存在，且与实验工作区逐字节一致。
 - 4 份补丁**平铺**在 `patches/`：0001（25 文件，必选）、0002（1 文件，可选前端）、0005（4 文件，原版 Android 平台）、0006（4 文件，汉化版 Android 平台）。0001 不含任何 `lang/*.ini`。
 - 校验：`8cd6e59` + 0001 + 0002 + `cn_extra/` + `add_lang_strings.sh` 与 `src/` 26/26 逐字节一致，`lang/English.ini` 与实验工作区一致；两个 Android 上游应用后与三方合并终态 27 文件逐字节一致；三套基线首次应用 + 幂等复跑均通过；`cn_extra` 13/13 一致，无冲突标记残留。
-- `platform/`：DEBIAN（`control.in` + `mkdeb.sh`）、pacman（`PKGBUILD` + `.install`）、freedesktop（`.desktop` + PNG 图标 + `install.sh`）。
+- `platform/`：DEBIAN（`control.in` + `mkdeb.sh`）、pacman（`PKGBUILD` + `.install`）、rpm（`sm64coopdx-iquedx.spec` + `mkrpm.sh`）、darwin（`Info.plist.in` + `mkmac.sh`）、freedesktop（`.desktop` + PNG 图标 + `install.sh`）。
 - 汉化版上游自带的 `palettes/*.ini`、`src/pc/djui/*_glyphs.h`、`textures/custom_font/*.png` 属于所选上游本身，不在本仓库收录范围；它自带的 `lang/Chinese.ini` 也不会被 `cn_extra/` 覆盖（只补缺）。

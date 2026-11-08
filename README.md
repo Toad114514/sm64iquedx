@@ -52,8 +52,8 @@ sh ./install.sh -h          # For Linux/MacOS 可用的参数选项
     - Debian 系 Linux 将生成 `sm64coopdx-iquedx_<版本>_<架构>.deb` 的软件包并使用 apt 安装
     - Arch 系 Linux 将通过 `makepkg -si` 生成 `sm64coopdx-iquedx-<版本>-<rel>-<架构>.pkg.tar.zst` 的软件包并使用 pacman 安装
       - 本来想提交到 AUR 的然后最近好像不给注册开放没办法了，目前还不能 `yay -S sm64coopdx-iquedx`
-    - 红帽系 Linux 将生成 RPM 文件并使用 dnf 安装（做一半）
-    - MacOS 系可以打包成 pkg 文件（没做）
+    - 红帽系 Linux 将生成 `sm64coopdx-iquedx-<版本>-<rel>.<架构>.rpm` 并使用 dnf 安装（`platform/rpm/mkrpm.sh`，依赖按 Fedora/openSUSE 分支写死，不走自动依赖）
+    - MacOS 系将打成 `SM64CoopDeluxe.app`，默认再包一层 `.dmg`（`--pkg` 出 `.pkg`、`--zip` 出 zip，`--app-only` 只出 app）（`platform/darwin/mkmac.sh`）
     - 其他 Linux 发行版 和 Unix-Like 默认将构建产物放在 `/opt/sm64coopdx-iquedx` 下，上述所有软件包应用本体也是在这个路径，也可自定义位置
 
 `install.bat` 还包括别的问题：
