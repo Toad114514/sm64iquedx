@@ -46,7 +46,7 @@ sh ./install.sh             # For Linux/MacOS
 
 - `src/` —— 被改过的文件，**路径与上游逐级一致**（唯一编辑源）
 - `patches/` —— 由 `src/` 对基线 diff 出来的补丁
-- `modules/cn-text/` —— 神游汉化核心模块：字形表、文本包、贴图覆盖
+- `platform/` ——  针对特殊平台的补丁
 - `scripts/gen_patches.sh` —— 从 `src/` 生成补丁
 - `upstream.txt` —— 补丁基线（上游仓库 + commit）
 

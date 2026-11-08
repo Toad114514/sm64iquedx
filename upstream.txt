@@ -1,10 +1,19 @@
 # 补丁基线
-# Upstream Patcher Commit
 
 # 原版 CoopDX / Super Mario 64 Co-op Deluxe        - main v1.5.2
 repo   = https://github.com/coop-deluxe/sm64coopdx
 commit = 8cd6e5977d9f920d51ca71f2c61801d019ed79c6
+# Android Port by ManisCat2
+android = https://github.com/ManIsCat2/sm64coopdx
+android-commit = 99c8d21abe4d24649b508d0f216c4359ed5d2a7a
 
 # 上善若&梅塔的长名字的汉化 / 神游马力欧64CoopDX   - Substition 汉化 1.0.1 (v1.5.2)
 cn-repo   = https://github.com/Shangshanruo66958/sm64coopdx-Chinese
-cn-commit =
+cn-commit = 110b96d59b775bbd7ae367444ad0df2d30aa5d49
+android-cn-repo = https://github.com/Shangshanruo666/sm64coopdx-Chinese-Android
+android-cn-commit = fba3a7470d00c5e8f40ebdc9d051003bbed65882
+
+# 扩展
+# 上善若的 Djui_Modern 模块
+djmd_repo = https://github.com/Shangshanruo666/djui_modern
+djmd_commit = 1b5f0d31a3e6c8dda0ef24f0ad2298f61ec59e1f
