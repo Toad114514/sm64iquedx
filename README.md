@@ -47,12 +47,12 @@ sh ./install.sh             # For Linux/MacOS
 `install.sh` 还包括一些别的问题：
  1. 询问是否构建安卓版本，勾选后将不再生成任何PC构建，只构建 Android。请注意编译本机必须安装了 Android NDK 与 Gradle 依赖才可编译
  2. 询问是否需要生成安装包，可根据平台生成对应的软件包
-   - Debian 系 Linux 将生成 `sm64coopdx-iquedx_<版本>_<架构>.deb` 的软件包并使用 apt 安装
-   - Arch 系 Linux 将通过 `makepkg -si` 生成 `sm64coopdx-iquedx-<版本>-<rel>-<架构>.pkg.tar.zst` 的软件包并使用 pacman 安装
-     - 本来想提交到 AUR 的然后最近好像不给注册开放没办法了，目前还不能 `yay -S sm64coopdx-iquedx`
-   - 红帽系 Linux 将生成 RPM 文件并使用 dnf 安装（做一半）
-   - MacOS 系可以打包成 pkg 文件（没做）
-   - 其他 Linux 发行版 和 Unix-Like 默认将构建产物放在 `/opt/sm64coopdx-iquedx` 下，上述所有软件包应用本体也是在这个路径，也可自定义位置
+    - Debian 系 Linux 将生成 `sm64coopdx-iquedx_<版本>_<架构>.deb` 的软件包并使用 apt 安装
+    - Arch 系 Linux 将通过 `makepkg -si` 生成 `sm64coopdx-iquedx-<版本>-<rel>-<架构>.pkg.tar.zst` 的软件包并使用 pacman 安装
+      - 本来想提交到 AUR 的然后最近好像不给注册开放没办法了，目前还不能 `yay -S sm64coopdx-iquedx`
+    - 红帽系 Linux 将生成 RPM 文件并使用 dnf 安装（做一半）
+    - MacOS 系可以打包成 pkg 文件（没做）
+    - 其他 Linux 发行版 和 Unix-Like 默认将构建产物放在 `/opt/sm64coopdx-iquedx` 下，上述所有软件包应用本体也是在这个路径，也可自定义位置
 
 `install.bat` 还包括别的问题：
   1. 是否选择使用软件打包程序打包，这将使用一个软件打包程序来打包 exe 文件生成安装向导，默认的安装路径在 `C:\Program Files\sm64coopdx-iquedx` （没做aaa）
