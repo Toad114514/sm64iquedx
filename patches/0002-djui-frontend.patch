@@ -1,0 +1,38 @@
+--- a/src/pc/djui/djui_panel_misc.c
++++ b/src/pc/djui/djui_panel_misc.c
+@@ -8,6 +8,9 @@
+ #include "pc/utils/misc.h"
+ #include "pc/configfile.h"
+ #include "game/hardcoded.h"
++#if defined(SM64COOPDX_CN_TEXT)
++#include "game/segment2.h"
++#endif
+ #if defined(_WIN32)
+ #include <windows.h>
+ #endif
+@@ -42,12 +45,25 @@
+ }
+ #endif
+ 
++#if defined(SM64COOPDX_CN_TEXT)
++// Runtime switch for the built-in iQue/Chinese text pack. Applies immediately:
++// chinese_text_pack_set_active() repoints the live dialog / course / act tables
++// and persists the choice.
++static void djui_panel_misc_chinese_text_changed(UNUSED struct DjuiBase* checkbox) {
++    chinese_text_pack_set_active(configChineseText);
++}
++#endif
++
+ void djui_panel_misc_create(struct DjuiBase* caller) {
+     struct DjuiThreePanel* panel = djui_panel_menu_create(DLANG(MISC, MISC_TITLE), false);
+     struct DjuiBase* body = djui_three_panel_get_body(panel);
+     {
+         djui_checkbox_create(body, DLANG(DISPLAY, SHOW_PING), &configShowPing, NULL);
+         djui_checkbox_create(body, DLANG(MISC, DISABLE_POPUPS), &configDisablePopups, NULL);
++#if defined(SM64COOPDX_CN_TEXT)
++        djui_checkbox_create(body, DLANG(MISC, CHINESE_TEXT_PACK), &configChineseText,
++                             djui_panel_misc_chinese_text_changed);
++#endif
+ #ifndef DEVELOPMENT
+         djui_checkbox_create(body, DLANG(MISC, LUA_PROFILER), &configLuaProfiler, NULL);
+ #endif

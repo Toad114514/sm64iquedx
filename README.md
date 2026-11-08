@@ -26,7 +26,7 @@ sh ./install.sh             # For Linux/MacOS
 
 这会先打开一个交互式的 TUI 界面询问构建产物需要：
  1. 上游版本：`coop-deluxe/sm64coopdx` 或者 `Shangshanruo66958/sm64coopdx-Chinese`
- 2. 是否应用 UIPatch 补丁，一般情况下不应用 UIPatch 补丁时只能通过修改配置文件修改，应用后可以在 设置 -> 其他 -> 神游汉化 中进行便捷修改
+ 2. 是否应用 UIPatch 补丁（`patches/0002-djui-frontend.patch`），一般情况下不应用 UIPatch 补丁时只能通过修改配置文件修改，应用后可以在 设置 -> 其他 -> 神游汉化 中进行便捷修改
  3. 是否应用 djui_modern 补丁，这是由上善若制作的现代化 Djoslin's UI 模块，详细可查看 [This](https://github.com/Shangshanruo666/djui_modern)，应用后本补丁也会根据其补丁做兼容
 
 `install.sh` 还包括一些别的问题：
@@ -45,9 +45,9 @@ sh ./install.sh             # For Linux/MacOS
 本仓库只存「改动」不存上游全量源码：
 
 - `src/` —— 被改过的文件，**路径与上游逐级一致**（唯一编辑源）
-- `patches/` —— 由 `src/` 对基线 diff 出来的补丁；`patches/cn_extra/` 存放上游不存在的新增文件（保持目录结构）
+- `patches/` —— `0001-src-overlay.patch` 必选主补丁、`0002-djui-frontend.patch` 可选前端补丁；`patches/cn_extra/` 存放上游不存在的新增文件（保持目录结构）
 - `platform/` ——  针对特殊平台的其他内容，例如 Debian 包所需的 debinfo
-- `scripts/gen_patches.sh` —— 从 `src/` 生成补丁
+- `scripts/gen_all_patches.sh` —— 改完 `src/` 后重新生成全部补丁
 - `upstream.txt` —— 补丁基线（上游仓库 + commit）
 
 约定详见 [docs/LAYOUT.md](docs/LAYOUT.md)。
