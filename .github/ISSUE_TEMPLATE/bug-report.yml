@@ -8,22 +8,26 @@ body:
   - type: markdown
     attributes:
       value: |
-        感谢反馈！**一至四为必填**，五至七可选，但填了能大幅加快定位速度。
+        感谢反馈！提交前请先确认一件事：
 
-        > 本仓库只负责「汉化补丁 + 打包脚本」本身。如果换成不打任何补丁的纯上游也能复现，请提到对应上游仓库去。
+        > 本仓库只负责「汉化补丁 + 打包脚本」本身。如果你用**不打任何补丁的纯上游**也能复现，请到对应的上游仓库去提交 Issue。
+
+        **一至四为必填**；五至七可选，但填了能省掉好几轮来回提问。
 
   # ── 一、声明 ──────────────────────────────────────────────
   - type: checkboxes
     id: declaration
     attributes:
       label: 一、声明
-      description: 提交前请逐项确认，全部勾选后才能提交。
+      description: |
+        提交前请逐项确认，**全部勾选**后才能提交。
+        如声明内容与事实不符，Issue 会被直接关闭并标记为 `Not Planned`。
       options:
         - label: 我已搜索过本仓库的 Issues（含已关闭的）和 Discussions，确认没有人报告过同样的问题。
           required: true
-        - label: 我已尝试用不打任何补丁的纯上游构建一次，确认该问题不是上游自身、也不是我的构建/打包环境造成的；若纯上游同样能复现，我已在第二部分说明。
+        - label: 我已用不打任何补丁的纯上游构建验证过，确认该问题不是上游自身、也不是我的构建/打包环境造成的；若纯上游同样能复现，我已在第二部分说明。
           required: true
-        - label: 我已排除常见操作失误：补丁没打全 / 没用 `apply_patches.sh` 按顺序应用 / 改过 `CN_TEXT_PACK` 后没有全量重编 / ROM 不是神游 dump / 存档或配置文件被旧版本污染。
+        - label: 我已排除操作失误：补丁没打全 / 没用 `apply_patches.sh` 按顺序应用 / 改过 `CN_TEXT_PACK` 后没有全量重编 / ROM 不是正确版本 / 存档或配置文件被旧版本污染 等。
           required: true
         - label: 我是在最新版本（最新分支 + 最新补丁，或最新 Release）上复现的，不是几个月前的旧构建。
           required: true
@@ -33,7 +37,7 @@ body:
     id: what-happened
     attributes:
       label: 二、发生了什么
-      description: 写清实际表现和你期望的表现。文字类问题请直接贴出错误文本（例如「暂停菜单课程名显示为方块」「对话第 3 行被截断」）。
+      description: 写清**实际表现**和**期望表现**。文字类问题请直接贴出错误文本（例如「暂停菜单课程名显示为方块」「对话第 3 行被截断」）。一句话说清也完全可以。
       value: |
         实际表现：
         ……
@@ -48,11 +52,11 @@ body:
     id: steps
     attributes:
       label: 三、复现步骤
-      description: 从启动游戏开始一步一步写。能稳定复现的步骤才算数；如果是偶发，请注明大约几次出现一次。
-      value: |
+      description: 从启动游戏开始一步一步写。只有能复现的步骤才有用；如果是偶发，请注明大概几次出现一次。
+      placeholder: |
         1. 启动游戏，进入 ……
-        2. 选择 ……
-        3. 看到 ……
+        2. 存档位置 / 关卡 / 菜单 ……
+        3. 按下 …… 后看到 ……
       render: markdown
     validations:
       required: true
@@ -61,39 +65,49 @@ body:
   - type: dropdown
     id: platform
     attributes:
-      label: 平台
-      description: 你实际运行的是哪一套构建。
+      label: 平台 & 上游
+      description: 你实际运行的是哪一套构建和上游仓库。选「自定义」时请把链接填在下一栏。
       options:
-        - PC
-        - Android
-        - PC 汉化
-        - Android 汉化
+        - PC (coop-deluxe/sm64coopdx)
+        - Android (ManIsCat2/sm64coopdx)
+        - PC 汉化 (Shangshanruo666/sm64coopdx-Chinese)
+        - Android 汉化 (Shangshanruo666/sm64coopdx-Chinese-Android)
+        - 自定义
     validations:
       required: true
 
   - type: input
     id: upstream
     attributes:
-      label: 上游链接
-      description: 你使用的上游仓库，最好带上分支或 commit。汉化上游请注明是哪个 fork。
+      label: 自定义的上游链接
+      description: 只在上面选了「自定义」时需要填；选了预设可以留空。最好带上分支或 commit，汉化上游请注明是哪个 fork。
       placeholder: https://github.com/coop-deluxe/sm64coopdx @ 8cd6e5977
     validations:
-      required: true
+      required: false
 
   - type: input
     id: patch-version
     attributes:
-      label: 补丁版本
-      description: 本仓库的 commit / tag，或你用的哪个 Release 包。
-      placeholder: ccc33ce（main）
+      label: 补丁版本 / 安装来源
+      description: 本仓库的 commit、tag 或 Release 包名；自己打的补丁写个大致的日期也行。不确定可留空。
+      placeholder: 68cb9bf（main）／ v1.0 Release 包
     validations:
-      required: true
+      required: false
+
+  - type: input
+    id: other-mods
+    attributes:
+      label: 其它补丁 / 模组 / 材质包
+      description: 除本补丁外还装了哪些模组、资源包或改过的文件。**排查冲突时这一栏非常关键**，没有就写「无」。
+      placeholder: 无 / djui_modern / xxx.lua ……
+    validations:
+      required: false
 
   - type: dropdown
     id: frontend-patch
     attributes:
       label: 是否启用配置前端补丁
-      description: 即 `0002-djui-frontend.patch`（设置 → 其他 里的「中文字库」复选框）；用 `apply_patches.sh` 时是否加了 `--frontend`。
+      description: 即 `0002-djui-frontend.patch`（设置 → 其他 里的「中文字库」复选框）
       options:
         - 已启用（带 --frontend）
         - 未启用
@@ -105,7 +119,7 @@ body:
     id: djui-modern
     attributes:
       label: 是否启用 djui_modern
-      description: 配置项 `djui_modern`（现代化菜单 UI）。
+      description: 配置项 `djui_modern`（现代化 DJUI，详细可查询 Shangshanruo666/djui_modern）。
       options:
         - 已启用
         - 未启用
@@ -131,7 +145,7 @@ body:
     id: logs-paste
     attributes:
       label: 五、日志（可选）— 粘贴文本
-      description: 启动输出、崩溃栈、`sm64.log`、`adb logcat` 或 ASan 报告。日志很长就只贴报错前后几十行，完整文件走下面上传。
+      description: 启动输出、崩溃栈、`sm64.log`、`adb logcat` 或 ASan 报告。日志太长就只贴报错前后几十行，完整文件走下面上传。
       render: shell
     validations:
       required: false
@@ -164,7 +178,7 @@ body:
   - type: upload
     id: evidence-files
     attributes:
-      label: 七、证据（可选）— 上传截图 / 录屏
+      label: 七、证据（可选）— 截图 or 录屏
       description: 拖进来即可。能拍清错误文字、错位位置或崩溃瞬间那一帧就够。
     validations:
       required: false
@@ -183,4 +197,4 @@ body:
     attributes:
       value: |
         ---
-        提交后如果又发现新线索，直接在这个 Issue 里补充即可，不用重开。谢谢！
+        提交后如果又发现新线索，直接在这个 Issue 里补充即可！在此感谢你的贡献！
