@@ -1,4 +1,4 @@
-<center>
+<div align="center">
 
 # sm64-iQueDeluxe
 
@@ -12,7 +12,7 @@
 <img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/toad114514/sm64iquedx">
 <img alt="GitHub forks" src="https://img.shields.io/github/forks/toad114514/sm64iquedx">
 
-</center>
+</div>
 
 ## 使用
 你必须拥有一个合法的《神游马力欧64》的 z64 decomp 副本，本仓库不包含 Rom。  
