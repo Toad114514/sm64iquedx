@@ -1,9 +1,10 @@
 * text=auto
 
-# 补丁必须按字节原样保存，禁止任何换行/空白转换
+# 补丁必须按字节原样保存，禁止任何换行/空白转换。
+# 只作用于 .patch/.diff 本身：patches/cn_extra/ 下放的是源码文件，
+# 若对整棵 patches/ 加 -text，这些 .c/.h 会被 git 当二进制、失去可读 diff。
 *.patch -text
 *.diff  -text
-patches/** -text
 
 # 脚本在 Windows 上也应保持 LF
 *.sh    text eol=lf

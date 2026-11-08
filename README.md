@@ -21,7 +21,7 @@ cd ique-deluxe
 
 # 根据系统选择执行的文件
 sh ./install.sh             # For Linux/MacOS
-./install.bat               # For Windows NT
+./install.bat               # For Windows NT (目前没有)
 ```
 
 这会先打开一个交互式的 TUI 界面询问构建产物需要：
@@ -45,7 +45,7 @@ sh ./install.sh             # For Linux/MacOS
 本仓库只存「改动」不存上游全量源码：
 
 - `src/` —— 被改过的文件，**路径与上游逐级一致**（唯一编辑源）
-- `patches/` —— 由 `src/` 对基线 diff 出来的补丁
+- `patches/` —— 由 `src/` 对基线 diff 出来的补丁；`patches/cn_extra/` 存放上游不存在的新增文件（保持目录结构）
 - `platform/` ——  针对特殊平台的其他内容，例如 Debian 包所需的 debinfo
 - `scripts/gen_patches.sh` —— 从 `src/` 生成补丁
 - `upstream.txt` —— 补丁基线（上游仓库 + commit）

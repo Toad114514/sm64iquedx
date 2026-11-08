@@ -29,7 +29,7 @@ while IFS= read -r f; do
     target="$upstream/$rel"
 
     if [ ! -e "$target" ]; then
-        echo "错误: $rel 在上游不存在。新增文件请放 modules/<name>/files/" >&2
+        echo "错误: $rel 在上游不存在。新增文件请放 patches/cn_extra/" >&2
         exit 1
     fi
     cmp -s "$f" "$target" && continue
@@ -38,7 +38,7 @@ while IFS= read -r f; do
     # 必须先自己判定，否则会把那句提示当成补丁内容写进 .patch
     if ! LC_ALL=C tr -d '\000' < "$f" | cmp -s - "$f" ||
        ! LC_ALL=C tr -d '\000' < "$target" | cmp -s - "$target"; then
-        echo "错误: $rel 含 NUL 字节（二进制）。请放 modules/<name>/files/" >&2
+        echo "错误: $rel 含 NUL 字节（二进制）。请放 patches/cn_extra/" >&2
         exit 1
     fi
 
