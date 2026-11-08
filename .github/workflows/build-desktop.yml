@@ -79,6 +79,7 @@ jobs:
             git
             make
             zip
+            unzip
             python3
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-glew
@@ -109,7 +110,10 @@ jobs:
 
       - name: 安装依赖
         run: |
-          brew install make pkg-config sdl2 glew
+          # coreutils 是硬需求：上游 Makefile 里 `ifeq ($(HOST_OS),Darwin) CP := gcp`
+          # （注释原文 "thank you apple very cool"），没有 gcp 直接
+          # `gmake: gcp: No such file or directory` 退 2。
+          brew install make pkg-config sdl2 glew coreutils
 
       - name: 参数自测（离线）
         run: sh scripts/test_install_args.sh
