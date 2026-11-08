@@ -146,6 +146,7 @@ scripts/apply_patches.sh <pc|android|android-cn> <上游干净 checkout> [--fron
 | `platform/rpm/` | `sm64coopdx-iquedx.spec` + `mkrpm.sh` | Fedora / RHEL / openSUSE 的 RPM |
 | `platform/darwin/` | `Info.plist.in` + `mkmac.sh` | macOS 的 `.app` / `.dmg` / `.pkg` / `.zip` |
 | `platform/freedesktop/` | `*.desktop` + 图标 + `install.sh` | 非打包发行版共用：启动器与图标 |
+| `platform/portable/` | `mkzip.sh` | 便携 zip（三平台通用，解压即玩） |
 
 ### platform/DEBIAN
 

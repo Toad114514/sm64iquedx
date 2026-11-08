@@ -22,7 +22,7 @@ ASK_ANDROID=no          # yes = 只构建 Android APK，不构建桌面版
 ASK_CHINESE=no          # yes = 用汉化版上游（PC: cn-repo / Android: android-cn-repo）
 ASK_FRONTEND=no         # yes = 额外应用 0002（设置 → 其他 里的中文字库开关）
 ASK_DJUI=no             # yes = 应用 djui_modern 模块
-ASK_PACKAGE=            # 空/auto/deb/rpm/arch/mac/other/no
+ASK_PACKAGE=            # 空/auto/deb/rpm/arch/mac/zip/other/no
 WORK_DIR="$repo/build-iquedx"   # 上游 checkout 与中间文件（.gitignore 的 build-*/）
 UPSTREAM_DIR=""                 # 为空则 = $WORK_DIR/upstream
 DIST_DIR="$repo/dist"           # 成品目录，platform/* 的默认值也是这里
@@ -57,8 +57,9 @@ usage() {
   -d, --djmd             应用 djui_modern 模块（在打 0001 之前）
 
 成品打包（-a 时忽略）
-  -p, --package <方式>   auto | all | deb | rpm | arch | mac | other | no
+  -p, --package <方式>   auto | all | deb | rpm | arch | mac | zip | other | no
                          auto 按当前系统判断；all 打本机能打的全部格式
+                         zip 便携压缩包（解压即玩，任何系统都能打）
                          no 只留在 dist/；不写这个参数就不打包
 
   -po, --package-only    不 clone、不打补丁、不编译，只用 --path 指向的已编译
@@ -342,7 +343,7 @@ collect_apk() {
 detect_package() {
     case "$(uname -s)" in
         Darwin) echo mac; return ;;
-        MINGW*|MSYS*|CYGWIN*) echo no; return ;;
+        MINGW*|MSYS*|CYGWIN*) echo zip; return ;;
     esac
 
     p_id=""
@@ -405,6 +406,10 @@ do_package() {
             step "打包 .app / .dmg"
             sh "$repo/platform/darwin/mkmac.sh" "$DIST_DIR" "$VERSION"
             ;;
+        zip)
+            step "打包便携 zip"
+            sh "$repo/platform/portable/mkzip.sh" "$DIST_DIR" "$VERSION"
+            ;;
         other)
             step "其他发行版"
             info "成品已就绪：$DIST_DIR"
@@ -413,19 +418,26 @@ do_package() {
             info "  sudo sh $repo/platform/freedesktop/install.sh"
             ;;
         *)
-            die "未知的打包方式：${p_way}（auto|all|deb|rpm|arch|mac|other|no）"
+            die "未知的打包方式：${p_way}（auto|all|deb|rpm|arch|mac|zip|other|no）"
             ;;
     esac
 }
 
 # all：本机能打几种就打几种，缺工具只警告不中断（CI 里没装 rpmbuild 也别炸）
 package_all() {
+    # zip 是唯一三平台通用的格式；缺工具时和其它格式一样只警告
+    p_zip=no
+    if command -v zip >/dev/null 2>&1; then
+        p_zip=yes
+    fi
+
     case "$(uname -s)" in
         Darwin)
+            # .app/.dmg 只有 macOS 上能打（mkmac.sh 缺工具时自己会降级）
             do_package mac
             ;;
         MINGW*|MSYS*|CYGWIN*)
-            warn "Windows 暂不支持打包，成品留在 $DIST_DIR"
+            # Windows 没有 deb/rpm/arch 那一套，只出便携 zip
             ;;
         *)
             if command -v dpkg-deb >/dev/null 2>&1; then
@@ -445,6 +457,12 @@ package_all() {
             fi
             ;;
     esac
+
+    if [ "$p_zip" = yes ]; then
+        do_package zip
+    else
+        warn "没有 zip，跳过便携压缩包"
+    fi
 }
 
 # ── 交互式询问 ───────────────────────────────────────────────────────────────
@@ -557,8 +575,8 @@ if [ -z "$VERSION" ]; then
 fi
 
 case "$ASK_PACKAGE" in
-    ""|auto|all|deb|rpm|arch|mac|other|no) ;;
-    *) die "--package 只接受 auto|all|deb|rpm|arch|mac|other|no，收到：$ASK_PACKAGE" ;;
+    ""|auto|all|deb|rpm|arch|mac|zip|other|no) ;;
+    *) die "--package 只接受 auto|all|deb|rpm|arch|mac|zip|other|no，收到：$ASK_PACKAGE" ;;
 esac
 
 # 没有参数：有终端就进向导，没有终端（CI）就按默认值直走

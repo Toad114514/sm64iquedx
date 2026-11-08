@@ -54,7 +54,7 @@ sh ./install.sh -a -c                     # 只构建 Android 汉化版 APK
 | `-c, --chinese` | 使用 `上善若和梅塔的长名字` 制作的汉化版上游仓库 `sm64coopdx-Chinese` 和 `sm64coopdx-Chinese-Android` |
 | `-f, --frontend` | 应用 `patches/0002-djui-frontend.patch`，在 设置 → 其他 里加开关；不应用时只能改配置文件 |
 | `-d, --djmd` | 应用 [djui_modern](https://github.com/Shangshanruo666/djui_modern) 模块 |
-| `-p, --package <方式>` | `auto`（按系统）/ `all`（本机能打的全部）/ `deb` / `rpm` / `arch` / `mac` / `other` / `no`；不写就不打包 |
+| `-p, --package <方式>` | `auto`（按系统）/ `all`（本机能打的全部）/ `deb` / `rpm` / `arch` / `mac` / `zip`（便携压缩包，解压即玩）/ `other` / `no`；不写就不打包 |
 | `-po, --package-only` | 不克隆/不打补丁/不编译，只用 `--path` 指向的已编译树打包；缺产物时 exit 255 |
 | `-o, --path <目录>` | 上游 checkout 位置，默认 `build-iquedx/upstream` |
 | `--dist <目录>` | 成品目录，默认 `dist/`（arch 打包写死读 `dist/`） |
@@ -89,10 +89,10 @@ sh install.sh -po -p all --path build-iquedx/upstream        # 只打包
 
 ### GitHub Actions
 
-- `.github/workflows/build-desktop.yml` —— Linux / Windows / macOS 三平台，默认参数 `-c -f -d`。Linux 编译完后再用 `-po -p all` 出 `.deb` / `.rpm`（没有 `makepkg` 就跳过 Arch 包），产物按平台上传为 artifact。
+- `.github/workflows/build-desktop.yml` —— Linux / Windows / macOS 三平台，默认参数 `-c -f -d`。Linux 编译完后再用 `-po -p all` 出 `.deb` / `.rpm` / 便携 zip，Arch 包另外进 `archlinux` 容器里跑 `makepkg`。**产物按格式拆成独立 artifact**（`-deb` / `-rpm` / `-arch` / `-portable`），不再是一个大 zip 里套一层 `dist/`。
 - `.github/workflows/build-android.yml` —— 默认参数 `-a -c -f -d`，装 SDK 33 + build-tools 33.0.2，跑完 `make TOUCH_CONTROLS=1` 再 `gradlew assembleRelease`，用上游自带证书签名后上传 APK。
 
-两个 workflow 都会先跑 `scripts/test_install_args.sh`(49 项，离线) 当门禁。
+两个 workflow 都会先跑 `scripts/test_install_args.sh`(50 项，离线) 当门禁。
 自测不依赖宿主机的打包工具（`dpkg-deb` / `rpmbuild` / `makepkg` 都有桩），所以三平台结果一致。
 
 也可以 fork 后用 GitHub Actions 自己编译，或到上善若的汉化群 https://qm.qq.com/q/twjhRVjgWs 找我要成品 *（为控制国内马里奥圈小鬼数量不直接发布）*。

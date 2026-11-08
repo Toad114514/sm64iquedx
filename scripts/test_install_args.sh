@@ -82,6 +82,7 @@ expect_var "前端补丁"          "-f -n"                        ASK_FRONTEND y
 expect_var "djui_modern 长选项" "--djui-modern"               ASK_DJUI     yes
 expect_var "djui_modern 短选项" "-d"                          ASK_DJUI     yes
 expect_var "打包方式"          "-p rpm"                       ASK_PACKAGE  rpm
+expect_var "便携 zip"          "-p zip"                       ASK_PACKAGE  zip
 expect_var "版本号覆盖"        "-V 9.9.9"                     VERSION      9.9.9
 expect_var "绝对路径"          "--path /tmp/ph-up"            UPSTREAM_DIR /tmp/ph-up
 expect_var "成品目录"          "--dist /tmp/ph-dist"          DIST_DIR     /tmp/ph-dist
@@ -101,7 +102,7 @@ expect_die "-V 缺值"            "-V 需要一个值"                  "-V"
 expect_die "-p 后跟选项"        "-p 需要一个值"                  "-p -n"
 expect_die "-V 后跟选项"        "--version 需要一个值"           "--version -n"
 expect_die "--path 后跟选项"    "--path 需要一个值"              "--path --dist x"
-expect_die "非法打包方式"       "只接受 auto|all|deb"            "-p zip -n"
+expect_die "非法打包方式"       "只接受 auto|all|deb"            "-p war -n"
 expect_die "未知参数"           "未知参数"                       "--nope"
 expect_die "未知短选项"         "未知参数"                       "-Z"
 
@@ -171,14 +172,20 @@ cat > "$S/bin/rpmbuild" <<'STUB'
 echo "[stub rpmbuild] $*"
 exit 0
 STUB
+cat > "$S/bin/zip" <<'STUB'
+#!/bin/sh
+echo "[stub zip] $*"
+exit 0
+STUB
 chmod +x "$S/bin/git" "$S/bin/make" "$S/bin/gmake" \
-         "$S/bin/makepkg" "$S/bin/dpkg-deb" "$S/bin/rpmbuild"
+         "$S/bin/makepkg" "$S/bin/dpkg-deb" "$S/bin/rpmbuild" "$S/bin/zip"
 
 # 桩仓库：install.sh + upstream.txt + 记录型 apply_patches.sh + 打包脚本桩
 # 打包脚本桩是必需的：-p all 会去 sh platform/<x>/mk*.sh，缺了它 sh 直接 exit 2，
 # 于是「缺工具只警告」的用例会因为「脚本不存在」而假失败。
 mkdir -p "$C/scripts" "$C/patches" "$C/platform/pacman" \
-         "$C/platform/DEBIAN" "$C/platform/rpm" "$C/platform/darwin"
+         "$C/platform/DEBIAN" "$C/platform/rpm" "$C/platform/darwin" \
+         "$C/platform/portable"
 cp "$repo/install.sh" "$repo/upstream.txt" "$C/"
 cat > "$C/scripts/apply_patches.sh" <<'STUB'
 #!/bin/sh
@@ -187,6 +194,8 @@ STUB
 printf '#!/bin/sh\necho "[stub mkdeb] $*"\n'  > "$C/platform/DEBIAN/mkdeb.sh"
 printf '#!/bin/sh\necho "[stub mkrpm] $*"\n'  > "$C/platform/rpm/mkrpm.sh"
 printf '#!/bin/sh\necho "[stub mkmac] $*"\n'  > "$C/platform/darwin/mkmac.sh"
+# 便携 zip 用真脚本（逻辑就是调用 zip，桩 zip 足够）
+cp "$repo/platform/portable/mkzip.sh" "$C/platform/portable/mkzip.sh"
 chmod +x "$C/platform/DEBIAN/mkdeb.sh" "$C/platform/rpm/mkrpm.sh" \
          "$C/platform/darwin/mkmac.sh"
 
@@ -283,17 +292,21 @@ out=$(run_tree -po -p all --path "$C/up")
 all_rc=$?
 case "$os_kind" in
     win)
-        if [ "$all_rc" -eq 0 ] && printf '%s\n' "$out" | grep -q "暂不支持打包"; then
-            ok "-p all（Windows）：只提示不打包，rc=0"
+        # Windows 没有 deb/rpm/arch，只出便携 zip
+        if [ "$all_rc" -eq 0 ] \
+           && printf '%s\n' "$out" | grep -q "打包便携 zip" \
+           && printf '%s\n' "$out" | grep -q "stub zip"; then
+            ok "-p all（Windows）：只出便携 zip"
         else
-            no "-p all（Windows）：rc=$all_rc → $(printf '%s\n' "$out" | tail -n 2 | tr '\n' ' ')"
+            no "-p all（Windows）：rc=$all_rc → $(printf '%s\n' "$out" | grep -E '打包|stub' | tr '\n' ' ')"
         fi
         ;;
     mac)
         if [ "$all_rc" -eq 0 ] \
            && printf '%s\n' "$out" | grep -q "打包 .app / .dmg" \
-           && printf '%s\n' "$out" | grep -q "stub mkmac"; then
-            ok "-p all（macOS）：走 mkmac 分支"
+           && printf '%s\n' "$out" | grep -q "stub mkmac" \
+           && printf '%s\n' "$out" | grep -q "stub zip"; then
+            ok "-p all（macOS）：mkmac + 便携 zip"
         else
             no "-p all（macOS）：rc=$all_rc → $(printf '%s\n' "$out" | grep -E '打包|stub' | tr '\n' ' ')"
         fi
@@ -302,8 +315,9 @@ case "$os_kind" in
         if [ "$all_rc" -eq 0 ] \
            && printf '%s\n' "$out" | grep -q "stub mkdeb" \
            && printf '%s\n' "$out" | grep -q "stub mkrpm" \
-           && printf '%s\n' "$out" | grep -q "stub makepkg"; then
-            ok "-p all（Linux）：deb / rpm / arch 三条分支都跑了"
+           && printf '%s\n' "$out" | grep -q "stub makepkg" \
+           && printf '%s\n' "$out" | grep -q "stub zip"; then
+            ok "-p all（Linux）：deb / rpm / arch / zip 四条分支都跑了"
         else
             no "-p all（Linux）：rc=$all_rc → $(printf '%s\n' "$out" | grep -E '跳过|stub|打包' | tr '\n' ' ')"
         fi
