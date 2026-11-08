@@ -503,60 +503,61 @@ void* main_game_init(UNUSED void* dummy) {
 }
 
 #if defined(SM64COOPDX_CN_TEXT)
-// Called once the vanilla rom has been imported and DJUI is up. Asks the user
-// (only the first time) whether to use the bundled Simplified-Chinese text
-// pack, then wires the dialog / course / act tables to the matching set.
-// Both buttons must dismiss the panel themselves. Unlike the vanilla confirms
-// (quit / disconnect), these callbacks only rewrite config -- nothing in them
-// tears the panel down, so leaving the panel at the top of the stack made the
-// dialog look completely unresponsive: the answer was applied and saved, but
-// the box stayed on screen. The panel is pushed on top of the main menu
-// (djui_init_late() runs before us), so djui_panel_back() has a parent to
-// return to.
-static void chinese_text_pack_confirm_yes(UNUSED struct DjuiBase* caller) {
-    configChineseText = true;
-    configChineseTextPrompted = true;
-    gCnTextPackActive = 1;
-    apply_cn_text_pack();
-    // The ROM load already applied the overlay with the *old* config value, so
-    // re-apply it here; otherwise answering "no" leaves the iQue power meter /
-    // title wordmark / COURSE sign on screen with US text (and vice versa).
-    cn_tex_apply(true);
-    configfile_save(configfile_name());
-    djui_panel_back();
-}
-
-static void chinese_text_pack_confirm_no(UNUSED struct DjuiBase* caller) {
-    configChineseText = false;
-    configChineseTextPrompted = true;
-    gCnTextPackActive = 0;
-    apply_cn_text_pack();
-    cn_tex_apply(false);
-    configfile_save(configfile_name());
-    djui_panel_back();
-}
-
+// Called once the vanilla rom has been imported and DJUI is up.
+//
+// There is deliberately no confirmation box: the answer is derived from what
+// the player actually owns.
+//
+//   * the exact 神游 (iQue) rom dump is present -> switch the Chinese pack on
+//   * it is not present                        -> leave it off
+//
+// The rom is only a *signal* here -- the engine still runs on the US image and
+// the pack data is compiled in -- but it is a decisive one. Someone who owns
+// the Chinese release wants Chinese text; someone who does not should not be
+// handed text lifted from a cartridge they never supplied. Asking a question
+// whose answer we can already read off the filesystem was pure friction.
+//
+// The switch is not forced on every launch, though: clicking 设置 → 其他 →
+// 中文字库(神游) sets configChineseTextUserSet, and from then on the player's
+// choice wins over detection in both directions -- otherwise unchecking the
+// box would silently undo itself on the next start.
+//
+// Note for configs written by an older build: there, configChineseTextPrompted
+// could only become true by answering the old box, and that answer is now
+// re-derived once from detection (owning the rom means "on"). The first manual
+// toggle is enough to make the choice stick again.
 static void chinese_text_pack_init(void) {
-    // Wire whichever set the saved config already selects. The "no" answer
-    // falls back to the vanilla rom-backed strings.
+    bool const detected = rom_checker_ique_rom_present();
+    bool const adopt    = !configChineseTextUserSet;
+
+    if (adopt && (configChineseText != detected || !configChineseTextPrompted)) {
+        configChineseText         = detected;
+        configChineseTextPrompted = true;
+
+        // rom_assets_load() already applied the texture overlay (power meter
+        // 「力量」, title wordmark, COURSE sign) using the *old* value, so
+        // re-apply it or the art and the text end up from different sets.
+        cn_tex_apply(detected);
+        configfile_save(configfile_name());
+    }
+
     gCnTextPackActive = configChineseText ? 1 : 0;
     apply_cn_text_pack();
 
-    if (configChineseTextPrompted) { return; }
-
-    // The pack data is compiled in from the iQue sources, so there is nothing
-    // to import here: just ask which set to use.
-    djui_panel_confirm_create_ex(NULL,
-        "\\#ffff00\\中文文本包",
-        "检测到已导入原版超级马力欧64 ROM。\n是否启用内置的神游（iQue）简体中文文本包？\n\n启用后游戏内对话框与选星界面将显示中文。",
-        chinese_text_pack_confirm_yes,
-        chinese_text_pack_confirm_no);
+    LOG_INFO("chinese text pack: iQue rom %s, pack %s%s",
+             detected ? "found" : "not found",
+             configChineseText ? "enabled" : "disabled",
+             adopt ? "" : " (kept: set by the player)");
 }
 
 // Runtime toggle used by the MISC settings checkbox. Swaps the live dialog /
 // course / act tables and makes the choice persistent.
 void chinese_text_pack_set_active(bool active) {
     configChineseText = active;
+    // Once the player flips this switch by hand, rom detection stops being the
+    // authority on it.
+    configChineseTextUserSet = true;
+    configChineseTextPrompted = true;
     gCnTextPackActive = active ? 1 : 0;
     apply_cn_text_pack();
     // The pack also swaps a handful of textures (the power meter's 「力量」 and
@@ -566,6 +567,7 @@ void chinese_text_pack_set_active(bool active) {
     configfile_save(configfile_name());
 }
 #endif
+
 
 int main(int argc, char *argv[]) {
     // handle terminal arguments
@@ -645,9 +647,9 @@ int main(int argc, char *argv[]) {
     djui_console_message_dequeue();
 
 #if defined(SM64COOPDX_CN_TEXT)
-    // A rom has been imported at this point; ask (once) whether the user wants
-    // the Simplified-Chinese (iQue) text pack, then point the dialog / course /
-    // act tables at the chosen set.
+    // A rom has been imported at this point; decide from the presence of the
+    // 神游 (iQue) dump whether the Chinese text pack is on, then point the
+    // dialog / course / act tables at the chosen set.
     chinese_text_pack_init();
 #endif
 

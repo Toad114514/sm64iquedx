@@ -169,7 +169,12 @@ extern char         configLanguage[MAX_CONFIG_STRING];
 // tables use the Simplified-Chinese data compiled from the official iQue
 // sources. When false the vanilla US text is used instead.
 extern bool         configChineseText;
+// Legacy: true once the old first-run confirmation box had been answered. Now
+// it only records that the automatic (rom-detection) decision has been taken.
 extern bool         configChineseTextPrompted;
+// The player changed the Chinese text switch by hand in the DJUI. From then on
+// rom detection must not overrule it, in either direction.
+extern bool         configChineseTextUserSet;
 extern bool         configForce4By3;
 extern bool         configDynosLocalPlayerModelOnly;
 extern unsigned int configPvpType;
