@@ -46,35 +46,21 @@ sh ./install.sh -d -f -p mac              # 带 djui_modern，出 .app / .dmg
 sh ./install.sh -a -c                     # 只构建 Android 汉化版 APK
 ```
 
-`install.sh` 做的事（顺序固定）：
-
-1. 按 `upstream.txt` 克隆上游并**检查目录结构**（`src/game`、`src/pc`、`src/pc/djui`、`text`、`lang`）；
-2. `-d` 时先挂 djui_modern（必须早于本体补丁）；
-3. `scripts/apply_patches.sh` 打 `0001` → Android 平台增量（`0005`/`0006`）→ `-f` 时的 `0002` → 铺 `patches/cn_extra`（只补缺）→ `scripts/add_lang_strings.sh` 补语言字符串；
-4. 编译（桌面走 `make`，macOS 加 `OSX_BUILD=1`；`-a` 走 Gradle 出 APK）；
-5. 收集运行期成品到 `dist/`，再按 `-p` 交给 `platform/` 打包。
-
-常用参数：
+可用的所有参数：
 
 | 参数 | 作用 |
 | --- | --- |
-| `-a, --android` | 只构建 Android APK（需要 NDK + Gradle），不做桌面打包 |
-| `-c, --chinese` | 用汉化版上游（PC 用 `cn-repo`，Android 用 `android-cn-repo`） |
-| `-f, --frontend` | 应用 `patches/0002-djui-frontend.patch`，在 设置 → 其他 → 神游汉化 里加开关；不应用时只能改配置文件 |
-| `-d, --djmd` | 应用 [djui_modern](https://github.com/Shangshanruo666/djui_modern) 模块（本仓库补丁已与其兼容） |
+| `-a, --android` | 只构建 Android APK（需要 NDK + Gradle），优先级高于 `--package` |
+| `-c, --chinese` | 使用 `上善若和梅塔的长名字` 制作的汉化版上游仓库 `sm64coopdx-Chinese` 和 `sm64coopdx-Chinese-Android` |
+| `-f, --frontend` | 应用 `patches/0002-djui-frontend.patch`，在 设置 → 其他 里加开关；不应用时只能改配置文件 |
+| `-d, --djmd` | 应用 [djui_modern](https://github.com/Shangshanruo666/djui_modern) 模块 |
 | `-p, --package <方式>` | `auto` / `deb` / `rpm` / `arch` / `mac` / `other` / `no`；不写就不打包 |
 | `-o, --path <目录>` | 上游 checkout 位置，默认 `build-iquedx/upstream` |
 | `--dist <目录>` | 成品目录，默认 `dist/`（arch 打包写死读 `dist/`） |
 | `-V, --version <版本>` | 包版本号，默认读 `upstream.txt` 的 `version` |
 | `-n, --print-config` | 只解析参数并打印最终配置，不克隆/不编译；核对参数是否传对 |
 
-参数自测（离线，桩掉 git/make/gradle，不联网不编译）：
-
-```bash
-sh scripts/test_install_args.sh    # 解析 + 错误路径 + 是否真的传到下游，共 37 项
-```
-
-打包产物：
+打包：
 
 - Debian 系 → `sm64coopdx-iquedx_<版本>_<架构>.deb`（`dpkg -i`）
 - Arch 系 → `platform/pacman/` 下 `makepkg -f --nodeps` 出 `sm64coopdx-iquedx-<版本>-<rel>-<架构>.pkg.tar.zst`
