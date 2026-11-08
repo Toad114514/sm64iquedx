@@ -19,7 +19,6 @@ upstream.txt 补丁基于的上游仓库与 commit（唯一权威基线）
 ```
 sm64iquedx/src/src/game/print.c          ← 对应上游 src/game/print.c
 sm64iquedx/src/src/menu/intro_geo.c      ← 对应上游 src/menu/intro_geo.c
-sm64iquedx/src/lang/Chinese.ini          ← 对应上游 lang/Chinese.ini
 sm64iquedx/src/Makefile                  ← 对应上游根目录 Makefile
 ```
 
@@ -82,3 +81,9 @@ modules/<name>/
 ## 版本
 
 打 tag `vX.Y.Z`，tag 说明里写明对应的上游 commit 与本版启用的模块清单。
+
+## 现状（快照，以 git log 为准）
+
+- `src/` 26 个文件：Makefile、text/define_{courses,text}.inc.c、lang/English.ini、`src/game|menu|pc` 下 22 个。
+- `modules/cn-text/files/` 12 个上游不存在的文件：`cn_font`、`cn_tex`、`cn_data/*.h`、`cn_intro_data.c`、`text/cn_*.inc.c`，以及 `lang/Chinese.ini`（上游 `lang/` 只有 11 种语言，没有中文）。
+- `patches/0001-src-overlay.patch`：对 `8cd6e59` 生成，应用后与 `src/` 逐字节一致（26/26 校验通过）。

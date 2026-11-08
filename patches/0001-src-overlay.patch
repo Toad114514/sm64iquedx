@@ -1,0 +1,2879 @@
+--- a/lang/English.ini
++++ b/lang/English.ini
+@@ -332,6 +332,7 @@
+ MISC_TITLE = "MISC"
+ PAUSE_IN_SINGLEPLAYER = "Pause In Singleplayer"
+ DISABLE_POPUPS = "Disable Popups"
++CHINESE_TEXT_PACK = "Chinese Text Pack (iQue)"
+ USE_STANDARD_KEY_BINDINGS_CHAT = "Classic Chatbox Controls"
+ MENU_OPTIONS = "Menu Options"
+ INFORMATION = "Info"
+@@ -438,6 +439,7 @@
+ Portuguese = "Portuguese (Português)"
+ Russian = "Russian (Русский)"
+ Spanish = "Spanish (Español)"
++Chinese = "Chinese (中文)"
+ 
+ [LOBBIES]
+ PUBLIC_LOBBIES = "PUBLIC LOBBIES"
+--- a/Makefile
++++ b/Makefile
+@@ -194,6 +194,18 @@
+ VERSION ?= us
+ $(eval $(call validate-option,VERSION,us))
+ 
++# CN_TEXT_PACK - embeds the Simplified-Chinese (iQue) in-game text pack.
++# This swaps the vanilla dialog / course / act strings for their two-byte CN
++# equivalents so the in-game dialog boxes and star-select screens render in
++# Chinese. Rendering support lives in src/game/cn_font.c.
++#   true  - Chinese text pack enabled (default)
++#   false - original English strings
++CN_TEXT_PACK ?= true
++
++ifeq ($(CN_TEXT_PACK),true)
++  DEFINES += SM64COOPDX_CN_TEXT=1
++endif
++
+ # Graphics microcode used
+ GRUCODE ?= f3dex2e
+ 
+@@ -442,6 +454,38 @@
+ # BUILD_DIR is the location where all build artifacts are placed
+ BUILD_DIR := $(BUILD_DIR_BASE)/$(VERSION)_pc
+ 
++#==============================================================================#
++# CN_TEXT_PACK flip guard                                                       #
++#==============================================================================#
++# SM64COOPDX_CN_TEXT is injected through C_DEFINES, so make has no way to know
++# that flipping CN_TEXT_PACK must invalidate every object. Without this guard a
++# flip silently links a mix of ON/OFF objects (the DJUI "Chinese text pack"
++# toggle and the dialog/course tables are #if'd out), which looks like the
++# localization "disappeared". Remember the last value and, when it changes,
++# touch the sources so the next build recompiles everything with the new
++# setting. That does not work here: this environment refuses utimes() on the
++# source tree and the touch ran with stderr discarded, so the guard reported
++# success while every stale object survived -- which is exactly how a mixed
++# binary (Chinese dialogs, English "PRESS START") got produced. Deleting the
++# objects cannot silently no-op, so we purge them and verify none survived.
++CN_TEXT_STAMP := $(BUILD_DIR_BASE)/.cn_text_pack_state
++$(shell \
++	mkdir -p $(BUILD_DIR_BASE) 2>/dev/null; \
++	_want='$(CN_TEXT_PACK)'; \
++	_have=$$(cat '$(CN_TEXT_STAMP)' 2>/dev/null); \
++	if [ "$$_have" != "$$_want" ]; then \
++		if [ -n "$$_have" ]; then \
++			printf 'CN_TEXT_PACK changed (%s -> %s): discarding every object.\n' "$$_have" "$$_want" >&2; \
++			find '$(BUILD_DIR)' -type f \( -name '*.o' -o -name '*.d' \) -exec rm -f {} + 2>/dev/null || true; \
++			_left=$$(find '$(BUILD_DIR)' -type f -name '*.o' 2>/dev/null | wc -l); \
++			if [ "$$_left" != "0" ]; then \
++				printf 'ERROR: %s object(s) survived the purge, this build would mix flags. Run `make -B` (forced rebuild) or delete build/%s_pc by hand.\n' "$$_left" "$(VERSION)" >&2; \
++				exit 1; \
++			fi; \
++		fi; \
++		printf '%s' "$$_want" > '$(CN_TEXT_STAMP)'; \
++	fi)
++
+ ifeq ($(WINDOWS_BUILD),1)
+ 	EXE := $(BUILD_DIR)/sm64coopdx.exe
+ else # Linux builds/binary namer
+@@ -1360,10 +1404,14 @@
+ 	$(V)$(PYTHON) $(TOOLS_DIR)/demo_data_converter.py assets/demo_data.json $(DEF_INC_CFLAGS) > $@
+ 
+ # Encode in-game text strings
+-$(BUILD_DIR)/text/%/define_courses.inc.c: text/define_courses.inc.c text/%/courses.h
++# NOTE: the CN sources are listed as prerequisites so that editing the
++# generated iQue text (rather than the template) still regenerates the
++# preprocessed output. Without this the build silently keeps a stale copy.
++CN_TEXT_DEPS := $(wildcard text/cn_dialogs_cn.inc.c text/cn_courses_cn.inc.c text/cn_labels.inc.c)
++$(BUILD_DIR)/text/%/define_courses.inc.c: text/define_courses.inc.c text/%/courses.h $(CN_TEXT_DEPS)
+ 	@$(PRINT) "$(GREEN)Preprocessing: $(BLUE)$@ $(NO_COL)\n"
+ 	$(V)$(CPP) $(PROF_FLAGS) $(CPPFLAGS) $< -o - -I text/$*/ | $(TEXTCONV) charmap.txt - $@
+-$(BUILD_DIR)/text/%/define_text.inc.c: text/define_text.inc.c text/%/courses.h text/%/dialogs.h
++$(BUILD_DIR)/text/%/define_text.inc.c: text/define_text.inc.c text/%/courses.h text/%/dialogs.h $(CN_TEXT_DEPS)
+ 	@$(PRINT) "$(GREEN)Preprocessing: $(BLUE)$@ $(NO_COL)\n"
+ 	$(V)$(CPP) $(PROF_FLAGS) $(CPPFLAGS) $< -o - -I text/$*/ | $(TEXTCONV) charmap.txt - $@
+ 
+--- a/src/game/area.c
++++ b/src/game/area.c
+@@ -13,6 +13,7 @@
+ #include "mario.h"
+ #include "mario_actions_cutscene.h"
+ #include "print.h"
++#include "segment2.h"
+ #include "hud.h"
+ #include "audio/external.h"
+ #include "area.h"
+@@ -141,9 +142,28 @@
+ #ifdef VERSION_EU
+             print_text(20, 20, "START");
+ #else
++#if defined(SM64COOPDX_CN_TEXT)
++            if (gCnTextPackActive) {
++                // iQue shows "按 Start". "按" is not a single font cell: it is a
++                // pseudo-glyph assembled from a 2x2 block of coloured HUD cells
++                // during the render pass (see cn_draw_hud_pseudo()). This
++                // function runs in the *update* phase, before a display list
++                // exists, so we only queue a one-byte 0xB0 label for
++                // render_text_labels() to expand -- exactly like the official CN
++                // build's `u8 sp18[] = { 0xB0, 0x00 }`. "START" stays a normal
++                // ASCII line below it.
++                u8 sp18[] = { 0xB0, 0x00 };
++                print_text_centered(60, 38, (char *) sp18);
++                print_text_centered(60, 20, "START");
++            } else {
++                print_text_centered(60, 38, "PRESS");
++                print_text_centered(60, 20, "START");
++            }
++#else
+             print_text_centered(60, 38, "PRESS");
+             print_text_centered(60, 20, "START");
+ #endif
++#endif
+         }
+     }
+ }
+--- a/src/game/ingame_menu.c
++++ b/src/game/ingame_menu.c
+@@ -39,6 +39,20 @@
+ #include "pc/lua/utils/smlua_text_utils.h"
+ #include "menu/ingame_text.h"
+ #include "pc/dialog_table.h"
++#include "cn_font.h"
++
++// CN-aware course/act name lookups. Declared in ingame_menu.h (star_select.c
++// needs them too) and defined further down in this file.
++
++// Runtime CN text-pack switch. It has to be visible from the dialog geometry
++// further down (render_dialog_box_type), not just from the name lookups: the
++// iQue dialog layout is a line taller and spaces its lines 20px apart, so
++// switching only the strings would leave the text overflowing the US box.
++#if defined(SM64COOPDX_CN_TEXT)
++#define CN_PACK_ACTIVE() (gCnTextPackActive != 0)
++#else
++#define CN_PACK_ACTIVE() false
++#endif
+ 
+ u16 gDialogColorFadeTimer;
+ s8 gLastDialogLineNum;
+@@ -458,16 +472,61 @@
+     f32 largestWidth = 0;
+     f32 width = 0;
+     u8* d = dialog;
+-    while (*d != DIALOG_CHAR_TERMINATOR) {
+-        if (*d == DIALOG_CHAR_NEWLINE) {
++    s32 pos = 0;
++    // The CN-ness cannot change during the walk, and cn_is_cn_string() is a
++    // table scan (it now also walks tokens). Hoist it out of the loop.
++    bool cn = cn_is_cn_string(d);
++
++    // Token-wise walk: a CN glyph is two bytes and CN control tokens also
++    // start with 0xFF, so the byte-wise `*d != TERMINATOR` test would stop at
++    // the first CN newline (0xFF 0xFE). Iteration is capped so a vanilla
++    // buffer can never drive this off the end of its array.
++    for (s32 cap = 0; cap < 4096; cap++) {
++        CnToken tok = cn_read_token(d, pos, cn);
++
++        if (tok.kind == CN_TOKEN_END) {
++            break;
++        }
++
++        if (tok.kind == CN_TOKEN_NEWLINE || (!tok.kind && d[pos] == DIALOG_CHAR_NEWLINE)) {
+             width = 0;
+-            d++;
++            pos += tok.kind ? tok.length : 1;
++            continue;
++        }
++
++        if (tok.kind == CN_TOKEN_SPACE) {
++            // A CN full-width space advances the cursor but is not visible.
++            width += (f32)gDialogCharWidths[DIALOG_CHAR_SPACE];
++            largestWidth = MAX(width, largestWidth);
++            pos += tok.length;
+             continue;
+         }
+-        width += (f32)(gDialogCharWidths[*d]);
++
++        if (tok.kind == CN_TOKEN_GLYPH) {
++            // Two-byte CN glyph: one full-width advance, not two byte widths.
++            width += cn_char_width(tok.code);
++            largestWidth = MAX(width, largestWidth);
++            pos += tok.length;
++            continue;
++        }
++
++        // CN_TOKEN_NONE: a vanilla single-byte font code (e.g. the 0xFA star
++        // icon). Fall through to the byte-wise handling below.
++        if (d[pos] == DIALOG_CHAR_TERMINATOR) {
++            break;
++        }
++
++        if (d[pos] == DIALOG_CHAR_NEWLINE) {
++            width = 0;
++            pos++;
++            continue;
++        }
++
++        width += (f32)gDialogCharWidths[d[pos]];
+         largestWidth = MAX(width, largestWidth);
+-        d++;
++        pos++;
+     }
++
+     return largestWidth;
+ #endif
+ }
+@@ -482,9 +541,33 @@
+ f32 get_generic_dialog_height(u8* dialog) {
+     s32 lines = 0;
+     u8* d = dialog;
+-    while (*d != DIALOG_CHAR_TERMINATOR) {
+-        if (*d == DIALOG_CHAR_NEWLINE) { lines++; }
+-        d++;
++    s32 pos = 0;
++    bool cn = cn_is_cn_string(d);
++
++    // Token-wise: count CN newlines (0xFF 0xFE) as well as vanilla 0xFE.
++    // Iteration capped as above.
++    for (s32 cap = 0; cap < 4096; cap++) {
++        CnToken tok = cn_read_token(d, pos, cn);
++
++        if (tok.kind == CN_TOKEN_END) {
++            break;
++        }
++        if (tok.kind == CN_TOKEN_NEWLINE) {
++            lines++;
++            pos += tok.length;
++            continue;
++        }
++        if (tok.kind) {
++            pos += tok.length;
++            continue;
++        }
++        if (d[pos] == DIALOG_CHAR_TERMINATOR) {
++            break;
++        }
++        if (d[pos] == DIALOG_CHAR_NEWLINE) {
++            lines++;
++        }
++        pos++;
+     }
+     return lines * 14;
+ }
+@@ -516,6 +599,10 @@
+     UNUSED s8 mark = DIALOG_MARK_NONE; // unused in EU
+     s32 strPos = 0;
+     u8 lineNum = 1;
++    // Whether `str` uses the CN encoding cannot change while we walk it, and
++    // cn_is_cn_string() is a table scan. Hoisting it out of the loop below
++    // keeps this from rescanning the CN tables once per glyph.
++    bool cn = cn_is_cn_string(str);
+ #ifdef VERSION_EU
+     s16 xCoord = x;
+     s16 yCoord = 240 - y;
+@@ -525,7 +612,55 @@
+     create_dl_translation_matrix(MENU_MTX_PUSH, x, y, 0.0f);
+ #endif
+ 
+-    while (str[strPos] != DIALOG_CHAR_TERMINATOR) {
++    // NOTE: the loop test cannot be `str[strPos] != DIALOG_CHAR_TERMINATOR`
++    // when CN text is in play: every CN control token starts with 0xFF, so a
++    // CN newline (0xFF 0xFE) or space (0xFF 0x9E) would look like the end of
++    // the string. The CN branch below decodes the full two-byte token and only
++    // 0xFF 0xFF terminates.
++    //
++    // The iteration count is capped: if `str` ever turns out to be a vanilla
++    // buffer (e.g. the ROM {0xFF, 0x00...} stubs), the CN walker would read
++    // 0xFF 0x00 as a glyph and never find 0xFF 0xFF, running off the end of the
++    // array. The cap turns that into a truncated string instead of a segfault.
++    for (s32 strCap = 0; strCap < 4096; strCap++) {
++        CnToken cnTok = cn_read_token(str, strPos, cn);
++
++        if (cnTok.kind == CN_TOKEN_END) {
++            break;
++        }
++
++        if (cnTok.kind == CN_TOKEN_NEWLINE) {
++#ifdef VERSION_EU
++            yCoord += 16;
++            xCoord = x;
++#endif
++            strPos += cnTok.length;
++            continue;
++        }
++
++        if (cnTok.kind == CN_TOKEN_SPACE) {
++#ifdef VERSION_EU
++            xCoord += 5;
++#else
++            create_dl_translation_matrix(MENU_MTX_NOPUSH, (f32)(gDialogCharWidths[DIALOG_CHAR_SPACE]), 0.0f, 0.0f);
++#endif
++            strPos += cnTok.length;
++            continue;
++        }
++
++        if (cnTok.kind == CN_TOKEN_GLYPH) {
++            render_cn_char(cnTok.code);
++            create_dl_translation_matrix(MENU_MTX_NOPUSH, cn_char_width(cnTok.code), 0.0f, 0.0f);
++            strPos += cnTok.length;
++            continue;
++        }
++
++        // Not a CN token: fall through to the vanilla single-byte handling.
++        // Re-check the terminator here because the loop test no longer does.
++        if (str[strPos] == DIALOG_CHAR_TERMINATOR) {
++            break;
++        }
++
+         switch (str[strPos]) {
+ #ifdef VERSION_EU
+             case DIALOG_CHAR_SPACE:
+@@ -684,6 +819,40 @@
+ 
+     u32 xStride; // X separation
+ 
++#if defined(SM64COOPDX_CN_TEXT)
++    // The HUD LUT is an RGBA16 coloured 8x8 font and has no CJK glyphs, so a CN
++    // string cannot go through the vanilla path at all -- every 0xFF lead byte
++    // would end the line immediately. Hand those to print_generic_string(),
++    // which already renders CJK through the IA8 dialog font.
++    //
++    // This is what makes the pause screen's "PAUSE" title and the HUD's
++    // "HI SCORE" / "CONGRATULATIONS" lines translate: they are all drawn with
++    // this function rather than the menu font.
++    //
++    // The two paths disagree about where y=0 is, and getting this wrong is
++    // silent -- the text still draws, just in the wrong place:
++    //   - this function emits gSPTextureRectangle, which gfx_draw_rectangle()
++    //     maps straight to NDC with `ndc_y = -(y / (4 * HALF_HEIGHT)) + 1`,
++    //     i.e. y grows DOWNWARD from the top of the screen. Every caller relies
++    //     on that: y=32 is the HUD timer, y=185 the coin counter.
++    //   - print_generic_string() pushes an ortho matrix from
++    //     create_dl_ortho_matrix(), in which y grows UPWARD from the bottom.
++    // Passing y through unchanged therefore lands a CN string mirrored about
++    // the middle of the screen. That is exactly how the pause menu's "暂停"
++    // ended up drawn at row 81-from-top == row 143-from-bottom, i.e. on top of
++    // the course-name row, where it read as a smudge behind "炸弹王国" rather
++    // than as a title.
++    //
++    // Convert explicitly. A CN glyph cell is CN_GLYPH_H tall and
++    // print_generic_string() takes the BOTTOM edge, so a glyph whose top edge
++    // should sit at screen row `y` is drawn at menu row
++    // SCREEN_HEIGHT - y - CN_GLYPH_H.
++    if (cn_is_cn_string(str)) {
++        print_generic_string(x, SCREEN_HEIGHT - y - CN_GLYPH_H, str);
++        return;
++    }
++#endif
++
+     if (hudLUT == HUD_LUT_JPMENU) {
+         xStride = 16;
+     } else { // HUD_LUT_GLOBAL
+@@ -758,14 +927,128 @@
+ }
+ #endif
+ 
++// Re-arm just the tile parameters the vanilla branches of
++// print_menu_generic_string() rely on, after a CJK glyph borrowed the render
++// tile for its 16x16 cell.
++//
++// This deliberately does NOT replay dl_menu_ia8_text_begin, even though that is
++// the obvious "put it back" call: the display list also resets the environment
++// colour to opaque white (see levels/menu/leveldata.c), and every screen that
++// prints its menu text black -- the act select torna sets env colour (0,0,0)
++// right before this -- would have its following vanilla characters silently
++// flipped to white.
++static void restore_menu_ia8_text_tile(void) {
++    gDPSetTile(gDisplayListHead++, G_IM_FMT_IA, G_IM_SIZ_8b, 0, 0, G_TX_LOADTILE, 0,
++               G_TX_WRAP | G_TX_NOMIRROR, G_TX_NOMASK, G_TX_NOLOD,
++               G_TX_WRAP | G_TX_NOMIRROR, G_TX_NOMASK, G_TX_NOLOD);
++    gDPTileSync(gDisplayListHead++);
++    gDPSetTile(gDisplayListHead++, G_IM_FMT_IA, G_IM_SIZ_8b, 1, 0, G_TX_RENDERTILE, 0,
++               G_TX_CLAMP, 3, G_TX_NOLOD, G_TX_CLAMP, 3, G_TX_NOLOD);
++    gDPSetTileSize(gDisplayListHead++, G_TX_RENDERTILE, 0, 0,
++                   (8 - 1) << G_TEXTURE_IMAGE_FRAC, (8 - 1) << G_TEXTURE_IMAGE_FRAC);
++}
++
+ void print_menu_generic_string(s16 x, s16 y, const u8 *str) {
+     UNUSED s8 mark = DIALOG_MARK_NONE; // unused in EU
+     s32 strPos = 0;
+     u32 curX = x;
+     u32 curY = y;
+     void **fontLUT = segmented_to_virtual(menu_font_lut);
++    bool cn = cn_is_cn_string(str);
++    // A CJK glyph is drawn with cn_draw_glyph_rect(), which reprograms
++    // G_TX_RENDERTILE for a 16x16 IA8 cell. Every vanilla branch below draws a
++    // bare gSPTextureRectangle and relies on the tile dl_menu_ia8_text_begin
++    // installed, so that tile has to be re-armed before the next vanilla
++    // character -- otherwise 8x8 menu glyphs are sampled with CJK geometry and
++    // smear. See restore_menu_ia8_text_tile() for why the display list itself
++    // is not replayed. (The dialog counterpart render_generic_char() re-emits
++    // its own tile settings every call, which is why print_generic_string()
++    // does not need this.)
++    //
++    // This flag is file-static, NOT a local: the tile is display-list state and
++    // outlives any single call. The star select screen draws a CJK act name and
++    // then the vanilla 8x8 star numbers through separate calls, and a local
++    // would be re-initialised to false by the second call -- so the numbers
++    // would be sampled with the CJK 16x16 geometry and come out as garbage.
++    // That breakage is independent of the text-pack switch, which is why it
++    // persisted with the pack both on and off.
++    static bool tileDirty = false;
++
++    // NOTE: the loop test cannot stay a byte-wise
++    // `str[strPos] != DIALOG_CHAR_TERMINATOR` when CN text is in play: every CN
++    // control token starts with 0xFF, so a CN space (0xFF 0x9E) would read as
++    // end-of-string and truncate the rest of the line. The CN branch decodes
++    // whole two-byte tokens and only 0xFF 0xFF terminates.
++    //
++    // The iteration count is capped so a vanilla buffer can never be walked off
++    // the end of its array.
++    for (s32 cap = 0; cap < 1024; cap++) {
++        if (cn) {
++            CnToken cnTok = cn_read_token(str, strPos, true);
++
++            if (cnTok.kind == CN_TOKEN_END) {
++                break;
++            }
++            if (cnTok.kind == CN_TOKEN_NEWLINE) {
++                strPos += cnTok.length;
++                continue;
++            }
++            if (cnTok.kind == CN_TOKEN_SPACE) {
++                curX += 4;
++                strPos += cnTok.length;
++                continue;
++            }
++            if (cnTok.kind == CN_TOKEN_GLYPH) {
++                // A CJK cell is 16px tall and is drawn from curY downwards, but a
++                // vanilla menu glyph is only 8px and is also anchored at curY.
++                // Inside a CN string the two therefore disagree by 4px: the
++                // digit in "冰雪中的8枚红色硬币" sat on the top edge of the line
++                // instead of its middle. Shift the 8px glyphs down by half the
++                // difference so mixed strings share one baseline.
++                u32 glyphY = cn ? (curY + 4) : curY;
++
++                if (cn_glyph_is_vanilla(cnTok.code)) {
++                    // 0x00xx is bit-identical to a menu-font index (digits,
++                    // A-Z, arrows). Draw it from the menu LUT rather than via
++                    // render_cn_char(), which would use the dialog font and so
++                    // change the glyph's look mid-string.
++                    u8 c = cn_glyph_vanilla_byte(cnTok.code);
++                    if (tileDirty) {
++                        restore_menu_ia8_text_tile();
++                        tileDirty = false;
++                    }
++                    gDPSetTextureImage(gDisplayListHead++, G_IM_FMT_IA, G_IM_SIZ_8b, 1, fontLUT[c]);
++                    gDPLoadSync(gDisplayListHead++);
++                    gDPLoadBlock(gDisplayListHead++, G_TX_LOADTILE, 0, 0, 8 * 8 - 1, CALC_DXT(8, G_IM_SIZ_8b_BYTES));
++                    gSPTextureRectangle(gDisplayListHead++, curX << 2, glyphY << 2,
++                                        (curX + 8) << 2, (glyphY + 8) << 2,
++                                        G_TX_RENDERTILE, 0, 0, 1 << 10, 1 << 10);
++                    curX += gDialogCharWidths[c];
++                } else {
++                    // CJK: a 16x16 cell drawn as a plain rectangle, exactly
++                    // like the vanilla branches below. Do NOT push a matrix and
++                    // reuse render_cn_char() -- see cn_draw_glyph_rect().
++                    cn_draw_glyph_rect(curX, curY, cnTok.code);
++                    tileDirty = true;
++                    curX += (u32) cn_char_width(cnTok.code);
++                }
++                strPos += cnTok.length;
++                continue;
++            }
++            // CN_TOKEN_NONE: a vanilla LUT byte embedded in a CN string (the
++            // 0xFA/0xFD star icons). Fall through to the vanilla path below.
++        }
++
++        // Re-check the terminator here, because the loop test no longer does.
++        if (str[strPos] == DIALOG_CHAR_TERMINATOR) {
++            break;
++        }
++
++        if (tileDirty) {
++            restore_menu_ia8_text_tile();
++            tileDirty = false;
++        }
+ 
+-    while (str[strPos] != DIALOG_CHAR_TERMINATOR) {
+         switch (str[strPos]) {
+ #ifdef VERSION_EU
+             case DIALOG_CHAR_UPPER_A_UMLAUT:
+@@ -792,19 +1075,21 @@
+                 curX += 4;
+                 break;
+             default:
++                // Same half-line correction as the CN-glyph branch above: an
++                // 8px vanilla glyph inside a 16px CN line sits 4px high.
+                 gDPSetTextureImage(gDisplayListHead++, G_IM_FMT_IA, G_IM_SIZ_8b, 1, fontLUT[str[strPos]]);
+                 gDPLoadSync(gDisplayListHead++);
+                 gDPLoadBlock(gDisplayListHead++, G_TX_LOADTILE, 0, 0, 8 * 8 - 1, CALC_DXT(8, G_IM_SIZ_8b_BYTES));
+-                gSPTextureRectangle(gDisplayListHead++, curX << 2, curY << 2, (curX + 8) << 2,
+-                                    (curY + 8) << 2, G_TX_RENDERTILE, 0, 0, 1 << 10, 1 << 10);
++                gSPTextureRectangle(gDisplayListHead++, curX << 2, (curY + (cn ? 4 : 0)) << 2, (curX + 8) << 2,
++                                    (curY + (cn ? 4 : 0) + 8) << 2, G_TX_RENDERTILE, 0, 0, 1 << 10, 1 << 10);
+ 
+ #ifndef VERSION_EU
+                 if (mark != DIALOG_MARK_NONE) {
+                     gDPSetTextureImage(gDisplayListHead++, G_IM_FMT_IA, G_IM_SIZ_8b, 1, fontLUT[mark + 0xEF]);
+                     gDPLoadSync(gDisplayListHead++);
+                     gDPLoadBlock(gDisplayListHead++, G_TX_LOADTILE, 0, 0, 8 * 8 - 1, CALC_DXT(8, G_IM_SIZ_8b_BYTES));
+-                    gSPTextureRectangle(gDisplayListHead++, (curX + 6) << 2, (curY - 7) << 2,
+-                                        (curX + 6 + 8) << 2, (curY - 7 + 8) << 2, G_TX_RENDERTILE, 0, 0, 1 << 10, 1 << 10);
++                    gSPTextureRectangle(gDisplayListHead++, (curX + 6) << 2, (curY - 7 + (cn ? 4 : 0)) << 2,
++                                        (curX + 6 + 8) << 2, (curY - 7 + (cn ? 4 : 0) + 8) << 2, G_TX_RENDERTILE, 0, 0, 1 << 10, 1 << 10);
+ 
+                     mark = DIALOG_MARK_NONE;
+                 }
+@@ -918,9 +1203,40 @@
+ s16 get_str_x_pos_from_center(s16 centerPos, u8 *str, UNUSED f32 scale) {
+     s16 strPos = 0;
+     f32 spacesWidth = 0.0f;
++    bool cn = cn_is_cn_string(str);
+ 
+-    while (str[strPos] != DIALOG_CHAR_TERMINATOR) {
+-        spacesWidth += gDialogCharWidths[str[strPos]];
++    // Token-wise: CN glyphs are two-byte and full-width, and CN control tokens
++    // begin with 0xFF, so a byte-wise terminator test would stop early.
++    // Iteration capped so a vanilla buffer cannot run off its array.
++    for (s32 cap = 0; cap < 4096; cap++) {
++        CnToken tok = cn_read_token(str, strPos, cn);
++
++        if (tok.kind == CN_TOKEN_END) {
++            break;
++        }
++        if (tok.kind == CN_TOKEN_NEWLINE) {
++            strPos += tok.length;
++            continue;
++        }
++        if (tok.kind == CN_TOKEN_SPACE) {
++            spacesWidth += (f32)gDialogCharWidths[DIALOG_CHAR_SPACE];
++            strPos += tok.length;
++            continue;
++        }
++        if (tok.kind == CN_TOKEN_GLYPH) {
++            spacesWidth += cn_char_width(tok.code);
++            strPos += tok.length;
++            continue;
++        }
++        // CN_TOKEN_NONE: vanilla byte, handled below.
++        if (str[strPos] == DIALOG_CHAR_TERMINATOR) {
++            break;
++        }
++        if (str[strPos] == DIALOG_CHAR_NEWLINE) {
++            strPos++;
++            continue;
++        }
++        spacesWidth += (f32)gDialogCharWidths[str[strPos]];
+         strPos++;
+     }
+     // return the x position of where the string starts as half the string's
+@@ -955,8 +1271,28 @@
+ s16 get_string_width(u8 *str) {
+     s16 strPos = 0;
+     s16 width = 0;
++    bool cn = cn_is_cn_string(str);
+ 
+-    while (str[strPos] != DIALOG_CHAR_TERMINATOR) {
++    // Token-wise walk; see get_str_x_pos_from_center for the rationale.
++    // Iteration capped for the same reason.
++    for (s32 cap = 0; cap < 4096; cap++) {
++        CnToken tok = cn_read_token(str, strPos, cn);
++
++        if (tok.kind == CN_TOKEN_END) {
++            break;
++        }
++        if (tok.kind) {
++            if (tok.kind == CN_TOKEN_GLYPH) {
++                width += (s16)cn_char_width(tok.code);
++            } else if (tok.kind == CN_TOKEN_SPACE) {
++                width += gDialogCharWidths[DIALOG_CHAR_SPACE];
++            }
++            strPos += tok.length;
++            continue;
++        }
++        if (str[strPos] == DIALOG_CHAR_TERMINATOR) {
++            break;
++        }
+         width += gDialogCharWidths[str[strPos]];
+         strPos++;
+     }
+@@ -1210,7 +1546,17 @@
+     f32 dialogWidth = 130 * 1.1f;
+     if (dialogWidth < gDialogMinWidth) dialogWidth = gDialogMinWidth;
+     create_dl_translation_matrix(MENU_MTX_PUSH, X_VAL1, Y_VAL1, 0);
+-    create_dl_scale_matrix(MENU_MTX_NOPUSH, dialogWidth / 130, ((f32) linesPerBox / Y_VAL2) + 0.1, 1.0f);
++
++    // iQue gives the box one extra line of height on top of drawing one line
++    // fewer per page (see totalLines below). That pairing is the whole trick:
++    // the taller 16px CJK glyphs need the room, and the shorter page keeps the
++    // text from filling it. Both halves must follow the same runtime switch as
++    // the strings, otherwise the CN text overflows the US-sized box.
++    f32 boxLines = (f32) linesPerBox;
++    if (CN_PACK_ACTIVE()) {
++        boxLines += 1.0f;
++    }
++    create_dl_scale_matrix(MENU_MTX_NOPUSH, dialogWidth / 130, (boxLines / Y_VAL2) + 0.1, 1.0f);
+ 
+     gSPDisplayList(gDisplayListHead++, dl_draw_text_bg_box);
+     gSPPopMatrix(gDisplayListHead++, G_MTX_MODELVIEW);
+@@ -1282,6 +1628,15 @@
+ #define Y_VAL3 16
+ #endif
+ 
++// iQue spaces dialog lines 20px apart (vs the US 16) so a 16px CJK glyph and
++// its shadow do not touch the line below. Y_VAL3 is a compile-time constant, so
++// the CN value has to be selected at each use.
++#if defined(SM64COOPDX_CN_TEXT)
++#define CN_DIALOG_LINE_H() (CN_PACK_ACTIVE() ? 20 : Y_VAL3)
++#else
++#define CN_DIALOG_LINE_H() (Y_VAL3)
++#endif
++
+ #ifdef VERSION_EU
+ void handle_dialog_scroll_page_state(s8 lineNum, s8 totalLines, s8 *pageState, s8 *xMatrix)
+ #else
+@@ -1299,7 +1654,7 @@
+ #ifdef VERSION_EU
+     gDialogY += 16;
+ #else
+-    create_dl_translation_matrix(MENU_MTX_PUSH, X_VAL3, 2 - (lineNum * Y_VAL3), 0);
++    create_dl_translation_matrix(MENU_MTX_PUSH, X_VAL3, 2 - (lineNum * CN_DIALOG_LINE_H()), 0);
+ 
+     linePos[0] = 0;
+ #endif
+@@ -1453,6 +1808,9 @@
+ 
+     u8 *str = sOverrideDialogHookString != NULL ? sOverrideDialogHookString : segmented_to_virtual(dialog->str);
+     s8 lineNum = 1;
++    // Hoisted: the encoding cannot change mid-dialog, and cn_is_cn_string() is
++    // a table scan that would otherwise run once per glyph below.
++    bool cn = cn_is_cn_string(str);
+ 
+     s8 totalLines;
+ 
+@@ -1470,9 +1828,14 @@
+     if (gDialogBoxState == DIALOG_STATE_HORIZONTAL) {
+         // If scrolling, consider the number of lines for both
+         // the current page and the page being scrolled to.
+-        totalLines = linesPerBox * 2 + 1;
++        //
++        // iQue shows one line fewer than US on every page (and in the
++        // two-page scroll case). Together with the taller box and the 20px
++        // line spacing this is what makes the CJK text breathe instead of
++        // spilling out of the box.
++        totalLines = CN_PACK_ACTIVE() ? (linesPerBox * 2 - 1) : (linesPerBox * 2 + 1);
+     } else {
+-        totalLines = linesPerBox + 1;
++        totalLines = CN_PACK_ACTIVE() ? linesPerBox : (linesPerBox + 1);
+     }
+ 
+     gSPDisplayList(gDisplayListHead++, dl_ia_text_begin);
+@@ -1494,13 +1857,72 @@
+     }
+ 
+ #ifndef VERSION_EU
+-    create_dl_translation_matrix(MENU_MTX_PUSH, X_VAL3, 2 - lineNum * Y_VAL3, 0);
++    create_dl_translation_matrix(MENU_MTX_PUSH, X_VAL3, 2 - lineNum * CN_DIALOG_LINE_H(), 0);
+ #endif
+ 
+     while (pageState == DIALOG_PAGE_STATE_NONE) {
+         change_and_flash_dialog_text_color_lines(colorMode, lineNum);
+         strChar = str ? str[strIdx] : DIALOG_CHAR_TERMINATOR;
+ 
++        // Chinese (iQue/CN) tokens. Every CN token is two bytes and the
++        // control tokens all start with 0xFF, which the vanilla switch below
++        // would immediately treat as DIALOG_CHAR_TERMINATOR. Handle the whole
++        // CN token stream here, before the vanilla single-byte switch, so
++        // 0xFF 0xFE (newline) and 0xFF 0x9E (space) behave correctly and only
++        // 0xFF 0xFF ends the string.
++        {
++            CnToken cnTok = cn_read_token(str, strIdx, cn);
++
++            if (cnTok.kind == CN_TOKEN_END) {
++                pageState = DIALOG_PAGE_STATE_END;
++#ifndef VERSION_EU
++                gSPPopMatrix(gDisplayListHead++, G_MTX_MODELVIEW);
++#endif
++                break;
++            }
++
++            if (cnTok.kind == CN_TOKEN_NEWLINE) {
++                lineNum++;
++#ifdef VERSION_EU
++                handle_dialog_scroll_page_state(lineNum, totalLines, &pageState, &xMatrix);
++                gDialogX = 0;
++#else
++                handle_dialog_scroll_page_state(lineNum, totalLines, &pageState, &xMatrix, &linePos);
++#endif
++                strIdx += cnTok.length;
++                continue;
++            }
++
++            if (cnTok.kind == CN_TOKEN_SPACE) {
++                // Mirror the vanilla DIALOG_CHAR_SPACE case: batch the space
++                // into xMatrix and flush it before the next visible glyph.
++#ifdef VERSION_EU
++                gDialogX += gDialogCharWidths[DIALOG_CHAR_SPACE];
++#else
++                xMatrix++;
++                linePos++;
++#endif
++                strIdx += cnTok.length;
++                continue;
++            }
++
++            if (cnTok.kind == CN_TOKEN_GLYPH) {
++                if (lineNum >= lowerBound && lineNum <= lowerBound + linesPerBox) {
++                    if (linePos || xMatrix != 1) {
++                        create_dl_translation_matrix(
++                            MENU_MTX_NOPUSH, (f32)(gDialogCharWidths[DIALOG_CHAR_SPACE] * (xMatrix - 1)), 0, 0);
++                    }
++
++                    render_cn_char(cnTok.code);
++                    create_dl_translation_matrix(MENU_MTX_NOPUSH, cn_char_width(cnTok.code), 0, 0);
++                    xMatrix = 1;
++                    linePos++;
++                }
++                strIdx += cnTok.length;
++                continue;
++            }
++        }
++
+         switch (strChar) {
+             case DIALOG_CHAR_TERMINATOR:
+                 pageState = DIALOG_PAGE_STATE_END;
+@@ -1733,7 +2155,21 @@
+         handle_menu_scrolling(MENU_SCROLL_HORIZONTAL, &gDialogLineNum, 1, 2);
+     }
+ 
+-    create_dl_translation_matrix(MENU_MTX_NOPUSH, (gDialogLineNum * X_VAL4_1) - X_VAL4_2, Y_VAL4_1 - (gLastDialogLineNum * Y_VAL4_2), 0);
++    // Choice marker geometry. iQue's CN build moves the marker a 20px line
++    // lower (Y_VAL4_2 20 vs 16) and its X term is ((n - 1) * 58) + 0; this
++    // function's folded `n * X - C` form expresses that as 58 / 58.
++    s32 xVal4_1 = X_VAL4_1;
++    s32 xVal4_2 = X_VAL4_2;
++    s32 yVal4_2 = Y_VAL4_2;
++#if defined(SM64COOPDX_CN_TEXT)
++    if (CN_PACK_ACTIVE()) {
++        xVal4_1 = 58;
++        xVal4_2 = 58;
++        yVal4_2 = 20;
++    }
++#endif
++
++    create_dl_translation_matrix(MENU_MTX_NOPUSH, (gDialogLineNum * xVal4_1) - xVal4_2, Y_VAL4_1 - (gLastDialogLineNum * yVal4_2), 0);
+ 
+     if (gDialogBoxType == DIALOG_TYPE_ROTATE) {
+         gDPSetEnvColor(gDisplayListHead++, 255, 255, 255, 255);
+@@ -1774,7 +2210,16 @@
+     f32 triangleOffset = gDialogMinWidth - 143;
+     if (triangleOffset < 0) triangleOffset = 0;
+ 
+-    create_dl_translation_matrix(MENU_MTX_PUSH, X_VAL5 + triangleOffset, (linesPerBox * Y_VAL5_1) + Y_VAL5_2, 0);
++    // iQue's "next page" triangle tracks the 20px CN line pitch (-18 vs -16)
++    // so it still sits at the bottom edge of the (one line taller) CN box.
++    s32 yVal5_1 = Y_VAL5_1;
++#if defined(SM64COOPDX_CN_TEXT)
++    if (CN_PACK_ACTIVE()) {
++        yVal5_1 = -18;
++    }
++#endif
++
++    create_dl_translation_matrix(MENU_MTX_PUSH, X_VAL5 + triangleOffset, (linesPerBox * yVal5_1) + Y_VAL5_2, 0);
+     create_dl_scale_matrix(MENU_MTX_NOPUSH, X_Y_VAL6, X_Y_VAL6, 1.0f);
+     create_dl_rotation_matrix(MENU_MTX_NOPUSH, -DEFAULT_DIALOG_BOX_ANGLE, 0, 0, 1.0f);
+ 
+@@ -2363,16 +2808,40 @@
+ #else
+ #define CRS_NUM_X1 100
+ #endif
++// Column X positions for the pause menu header block.
++//
++// These are the vanilla US numbers, and that is deliberate: the official iQue
++// build (n64decomp-cn, branch "ique hotfix") uses exactly the same values for
++// its CN layout -- TXT_COURSE_X 63, CRS_NUM_X1 100, LVL_NAME_X 117,
++// TXT_STAR_X 98 -- because "关卡" is only two 16px glyphs (32px) where
++// "COURSE" is 6 narrow ones, so the wider label fits in the same slot and every
++// column to the right of it lands in the same place. Deriving the number's
++// position from the measured label width (an earlier revision did) broke the
++// "COURSE x" spacing on the *vanilla* side, because get_level_name_sm64() and
++// the ROM table disagree about which prefix to skip when the pack is off.
++//
++// The one column that genuinely differs is MYSCORE: "MY SCORE" is 8 narrow
++// glyphs (~48px) but "我的积分" is 4 full-width ones (64px), which at x=62 ends
++// at 126 and collides with the star counter at x=118. The iQue build moves it
++// to 42 for exactly that reason, so MYSCORE_X is chosen at run time below.
+ #ifdef VERSION_EU
+ #define TXT_STAR_X 89
+ #define ACT_NAME_X 107
+ #define LVL_NAME_X 108
+ #define MYSCORE_X  48
++#define TXT_COURSE_X 30
+ #else
+ #define TXT_STAR_X 98
+ #define ACT_NAME_X 116
+ #define LVL_NAME_X 117
+ #define MYSCORE_X  62
++#define TXT_COURSE_X 63
++#endif
++
++// "我的积分" is 64px wide against "MY SCORE"'s ~48px, so the vanilla x=62 runs
++// the label into the star counter at x=118. The iQue build uses 42.
++#if defined(SM64COOPDX_CN_TEXT) && !defined(VERSION_EU)
++#define MYSCORE_X_CN 42
+ #endif
+ 
+ void render_pause_my_score_coins(void) {
+@@ -2387,17 +2856,47 @@
+     };
+ #define textMyScore textMyScore[gInGameLanguage]
+ #else
+-    INGAME_TEXT_COPY(textCourse, TEXT_COURSE);
+-    INGAME_TEXT_COPY(textMyScore, TEXT_MY_SCORE);
++    INGAME_TEXT_COPY(textCourse, TEXT_COURSE, CN_LABEL_COURSE);
++    INGAME_TEXT_COPY(textMyScore, TEXT_MY_SCORE, CN_LABEL_MY_SCORE);
+ #endif
+-    INGAME_TEXT_COPY(textStar, TEXT_STAR);
+-    INGAME_TEXT_COPY(textUnfilledStar, TEXT_UNFILLED_STAR);
++    INGAME_TEXT_COPY(textStar, TEXT_STAR, CN_LABEL_STAR);
++    INGAME_TEXT_COPY(textUnfilledStar, TEXT_UNFILLED_STAR, CN_LABEL_UNFILLED_STAR);
+ 
+     u8 strCourseNum[4];
+     u8 courseIndex = gCurrCourseNum - 1;
+     u8 starIndex = clamp(gDialogCourseActNum, 1, MAX_ACTS);
+-    u8 *courseName = (u8*) get_level_name_sm64(gCurrCourseNum, gCurrLevelNum, gCurrAreaIndex, 1);
++    u8 *courseNameRaw = (u8*) get_level_name_sm64(gCurrCourseNum, gCurrLevelNum, gCurrAreaIndex, 1);
++    // Every course-name buffer carries a leading decoration that must not be
++    // drawn: the vanilla table has a 3-byte [colour][num][0x9E] prefix (hence
++    // the historic `+ 3`), and the CN table adds U+3000 + full-width number +
++    // U+3000 on top of that. This line already prints the course number, so
++    // both would show it twice.
++    //
++    // The two sources have to be chosen by the pack switch, not merged. The CN
++    // table only holds Chinese while the pack is on -- with it off,
++    // apply_cn_text_pack() has re-pointed seg2_course_name_table back at the
++    // ROM buffers -- so running cn_strip_course_name_decoration() on it
++    // unconditionally handed the *vanilla* buffer to the renderer without the
++    // `+ 3`, and the name was drawn with its " 1 " prefix still attached, well
++    // clear of "COURSE x". Same reason actName below branches.
++    bool cnPack = CN_PACK_ACTIVE();
++    u8 *courseName = courseNameRaw + 3;
++    if (cnPack) {
++        // Main-course names come from the CN-aware table so the pause header
++        // shows Chinese too. Non-main courses keep the vanilla helper, which
++        // still has to supply the synthetic castle/ending names.
++        const u8 *cnName = (gCurrCourseNum >= COURSE_MIN && gCurrCourseNum <= COURSE_STAGES_MAX)
++            ? ingame_menu_get_course_name(gCurrCourseNum) : NULL;
++        if (cnName != NULL) { courseName = (u8 *)cn_strip_course_name_decoration(cnName); }
++    }
+     u8 *actName = (u8*) get_star_name_sm64(gCurrCourseNum, starIndex, 1);
++    if (cnPack) {
++        // Same rationale as the course name right above: the vanilla helper
++        // round-trips through the single-byte font and would turn a CN act
++        // name into spaces. NULL for slots the CN table does not cover.
++        const u8 *cnAct = ingame_menu_get_act_name(gCurrCourseNum, starIndex);
++        if (cnAct != NULL) { actName = (u8 *)cnAct; }
++    }
+     u8 starFlags;
+ 
+     starFlags = save_file_get_star_flags(gCurrSaveFileNum - 1, gCurrCourseNum - 1);
+@@ -2416,19 +2915,27 @@
+     gDPSetEnvColor(gDisplayListHead++, 255, 255, 255, gDialogTextAlpha);
+ 
+     if (courseIndex < COURSE_STAGES_COUNT && save_file_get_course_star_count(gCurrSaveFileNum - 1, courseIndex) != 0) {
++#if defined(SM64COOPDX_CN_TEXT) && !defined(VERSION_EU)
++        print_generic_string(cnPack ? MYSCORE_X_CN : MYSCORE_X, 121, textMyScore);
++#else
+         print_generic_string(MYSCORE_X, 121, textMyScore);
++#endif
+     }
+ 
+     if (courseIndex < COURSE_STAGES_COUNT) {
+ #ifdef VERSION_EU
+         print_generic_string(48, 157, gTextCourseArr[gInGameLanguage]);
+ #else
+-        print_generic_string(63, 157, textCourse);
++        print_generic_string(TXT_COURSE_X, 157, textCourse);
+ #endif
+         int_to_str(gCurrCourseNum, strCourseNum);
+ #ifdef VERSION_EU
+         print_generic_string(get_string_width(gTextCourseArr[gInGameLanguage]) + 51, 157, strCourseNum);
+ #else
++        // Fixed column, exactly like vanilla and like the iQue build. Measuring
++        // the label instead ("关卡" is 32px, "COURSE" ~37px) put the number at
++        // a different place depending on the pack state, which is what made the
++        // vanilla header look mis-spaced.
+         print_generic_string(CRS_NUM_X1, 157, strCourseNum);
+ #endif
+ 
+@@ -2441,19 +2948,19 @@
+             print_generic_string(ACT_NAME_X, 140, actName);
+         }
+ #ifndef VERSION_JP
+-        print_generic_string(LVL_NAME_X, 157, &courseName[3]);
++        print_generic_string(LVL_NAME_X, 157, courseName);
+ #endif
+     }
+ #ifndef VERSION_JP
+     else {
+ #if defined(VERSION_US) || defined(VERSION_SH)
+-        print_generic_string(94, 157, &courseName[3]);
++        print_generic_string(94, 157, courseName);
+ #elif defined(VERSION_EU)
+-        print_generic_string(get_str_x_pos_from_center(159, &courseName[3], 10.0f), 157, &courseName[3]);
++        print_generic_string(get_str_x_pos_from_center(159, courseName, 10.0f), 157, courseName);
+ #endif
+     }
+ #else
+-    print_generic_string(117, 157, &courseName[3]);
++    print_generic_string(117, 157, courseName);
+ #endif
+     gSPDisplayList(gDisplayListHead++, dl_ia_text_end);
+ }
+@@ -2469,8 +2976,8 @@
+ #endif
+ 
+ void render_pause_camera_options(s16 x, s16 y, s8 *index, s16 xIndex) {
+-    INGAME_TEXT_COPY(textLakituMario, TEXT_LAKITU_MARIO);
+-    INGAME_TEXT_COPY(textLakituStop, TEXT_LAKITU_STOP);
++    INGAME_TEXT_COPY(textLakituMario, TEXT_LAKITU_MARIO, CN_LABEL_LAKITU_MARIO);
++    INGAME_TEXT_COPY(textLakituStop, TEXT_LAKITU_STOP, CN_LABEL_LAKITU_STOP);
+ #ifdef VERSION_EU
+     u8 textNormalUpClose[][20] = {
+         { TEXT_NORMAL_UPCLOSE },
+@@ -2485,8 +2992,8 @@
+ #define textNormalUpClose textNormalUpClose[gInGameLanguage]
+ #define textNormalFixed   textNormalFixed[gInGameLanguage]
+ #else
+-    INGAME_TEXT_COPY(textNormalUpClose, TEXT_NORMAL_UPCLOSE);
+-    INGAME_TEXT_COPY(textNormalFixed, TEXT_NORMAL_FIXED);
++    INGAME_TEXT_COPY(textNormalUpClose, TEXT_NORMAL_UPCLOSE, CN_LABEL_NORMAL_UPCLOSE);
++    INGAME_TEXT_COPY(textNormalFixed, TEXT_NORMAL_FIXED, CN_LABEL_NORMAL_FIXED);
+ #endif
+ 
+     handle_menu_scrolling(MENU_SCROLL_HORIZONTAL, index, 1, 2);
+@@ -2494,10 +3001,27 @@
+     gSPDisplayList(gDisplayListHead++, dl_ia_text_begin);
+     gDPSetEnvColor(gDisplayListHead++, 255, 255, 255, gDialogTextAlpha);
+ 
+-    print_generic_string(x + 14, y + 2, textLakituMario);
+-    print_generic_string(x + TXT1_X, y - 13, textNormalUpClose);
+-    print_generic_string(x + 124, y + 2, textLakituStop);
+-    print_generic_string(x + TXT2_X, y - 13, textNormalFixed);
++    // The US layout is two stacked rows per column: "LAKITU MARIO" over
++    // "NORMALUPCLOSE", "LAKITU STOP" over "NORMALFIXED". That only works
++    // because the rows are 15px apart and the glyphs are 8px tall. The Chinese
++    // labels are 16px tall, so the same rows overlap by a pixel and, worse,
++    // "跟随马力欧" (5 full-width glyphs = 80px) sits almost exactly on top of
++    // "特写镜头" (4 glyphs = 64px) at the same X -- the pair renders as one
++    // illegible smear and reads as "the sub-labels are missing".
++    //
++    // The official iQue build drops the LAKITU row entirely and keeps only the
++    // two real choices, on one line (n64decomp-cn, "ique hotfix",
++    // src/game/ingame_menu.c has an explicit #ifdef VERSION_CN branch doing
++    // exactly this). Follow it: one row, the two options.
++    if (CN_PACK_ACTIVE()) {
++        print_generic_string(x + 14, y + 2, textNormalUpClose);
++        print_generic_string(x + 124, y + 2, textNormalFixed);
++    } else {
++        print_generic_string(x + 14, y + 2, textLakituMario);
++        print_generic_string(x + TXT1_X, y - 13, textNormalUpClose);
++        print_generic_string(x + 124, y + 2, textLakituStop);
++        print_generic_string(x + TXT2_X, y - 13, textNormalFixed);
++    }
+ 
+     gSPDisplayList(gDisplayListHead++, dl_ia_text_end);
+     create_dl_translation_matrix(MENU_MTX_PUSH, ((index[0] - 1) * xIndex) + x, y + Y_VAL7, 0);
+@@ -2524,8 +3048,15 @@
+ #endif
+ 
+ void render_pause_course_options(s16 x, s16 y, s8 *index, s16 yIndex) {
+-    u8 TEXT_EXIT_TO_CASTLE[16] = { DIALOG_CHAR_TERMINATOR };
+-    convert_string_ascii_to_sm64(TEXT_EXIT_TO_CASTLE, "EXIT TO CASTLE", false);
++    // "EXIT TO CASTLE" has no TEXT_* constant in the vanilla ROM -- it was
++    // built on the stack with the ASCII converter, which cannot emit the
++    // two-byte CN encoding. Route it through the label table so it gets a
++    // translation; the vanilla ASCII buffer stays as the fallback.
++    u8 textExitToCastleVanilla[16] = { DIALOG_CHAR_TERMINATOR };
++    convert_string_ascii_to_sm64(textExitToCastleVanilla, "EXIT TO CASTLE", false);
++    const u8 *textExitToCastle = cn_label_get(CN_LABEL_EXIT_TO_CASTLE)
++        ? cn_label_get(CN_LABEL_EXIT_TO_CASTLE)
++        : (const u8 *)textExitToCastleVanilla;
+ 
+ #ifdef VERSION_EU
+     u8 textContinue[][10] = {
+@@ -2548,9 +3079,9 @@
+ #define textExitCourse   textExitCourse[gInGameLanguage]
+ #define textCameraAngleR textCameraAngleR[gInGameLanguage]
+ #else
+-    INGAME_TEXT_COPY(textContinue, TEXT_CONTINUE);
+-    INGAME_TEXT_COPY(textExitCourse, TEXT_EXIT_COURSE);
+-    INGAME_TEXT_COPY(textCameraAngleR, TEXT_CAMERA_ANGLE_R);
++    INGAME_TEXT_COPY(textContinue, TEXT_CONTINUE, CN_LABEL_CONTINUE);
++    INGAME_TEXT_COPY(textExitCourse, TEXT_EXIT_COURSE, CN_LABEL_EXIT_COURSE);
++    INGAME_TEXT_COPY(textCameraAngleR, TEXT_CAMERA_ANGLE_R, CN_LABEL_CAMERA_ANGLE_R);
+ #endif
+ 
+     handle_menu_scrolling(MENU_SCROLL_VERTICAL, index, 1, 4);
+@@ -2560,7 +3091,7 @@
+ 
+     print_generic_string(x + 10, y - 2, textContinue);
+     print_generic_string(x + 10, y - 17, textExitCourse);
+-    print_generic_string(x + 10, y - 32, TEXT_EXIT_TO_CASTLE);
++    print_generic_string(x + 10, y - 32, textExitToCastle);
+ 
+     if (index[0] != 4) {
+         print_generic_string(x + 10, y - 47, textCameraAngleR);
+@@ -2630,12 +3161,85 @@
+     gDialogLineNum = courseDone;
+ }
+ 
++// iQue's own title strings for the coloured HUD font, byte-for-byte from
++// include/text_strings.h.in of the official CN decomp.
++//
++// These are single-byte codes into cn_hud_glyphs_rgba16.h and have nothing to do
++// with the two-byte CN token encoding the rest of this file walks. The 0xFE
++// bytes are the iQue line break, 0xFF terminates.
++//
++// The blank codes matter: iQue pads every title to a fixed 6-glyph line, and
++// four of TEXT_PAUSE's twelve codes (0x86, 0x88, 0x8F, 0x91) are fully
++// transparent cells that exist only to place the two characters. cn_draw_hud_title()
++// draws them as nothing and still advances 16px, which reproduces iQue's spacing
++// exactly -- dropping them instead would shift "停" 32px to the left.
++// iQue's own title strings for the coloured HUD font.
++//
++// The byte sequences are verbatim from include/text_strings.h.in in the official
++// CN decomp, including the 0xFE line break: iQue really does draw these over
++// TWO lines, because the English titles they replaced ("SAVE AND" / "CONTINUE")
++// were two lines long and the layout had to keep matching.
++//
++// The codes are single bytes indexing cn_hud_glyphs_rgba16.h and have nothing to
++// do with the two-byte CN token encoding the rest of this file walks.
++//
++// Why the two lines are NOT identical: line 1 holds full-width 16px cells,
++// while line 2 holds half-width ~8px cells (their ink sits in one half of the
++// 16px cell). print_hud_lut_string() advances 16px for every code >= 0x3A
++// regardless, so line 2 renders as narrow glyphs with wide gaps. That looks
++// broken but it is what the hardware does; do not "fix" the advance per glyph,
++// or line 1 stops lining up too.
++//
++// The blank codes are load-bearing: iQue pads every title to a fixed 6-glyph
++// line, and four of TEXT_PAUSE's twelve codes (0x86, 0x88, 0x8F, 0x91) are
++// fully transparent cells that exist only to position the characters.
++// cn_draw_hud_title() draws them as nothing and still advances 16px -- dropping
++// them would shift "停" 32px to the left.
++#define CN_HUD_STR_PAUSE   0x86, 0x87, 0x8A, 0x8B, 0x8E, 0x8F, 0xFE, 0x88, 0x89, 0x8C, 0x8D, 0x90, 0x91, 0xFF
++#define CN_HUD_STR_HI_SCORE 0x6A, 0x6B, 0x6E, 0x6F, 0x72, 0x73, 0xFE, 0x6C, 0x6D, 0x70, 0x71, 0x74, 0x75, 0xFF
++#define CN_HUD_STR_CONGRAT  0x3A, 0x3B, 0x3E, 0x3F, 0x42, 0x43, 0xFE, 0x3C, 0x3D, 0x40, 0x41, 0x44, 0x45, 0xFF
++
++// Placement, taken from the official decomp's own VERSION_CN branches
++// (src/game/ingame_menu.c):
++//     #elif defined(VERSION_CN)  TXT_HISCORE_X 109  TXT_HISCORE_Y 26
++//                               TXT_CONGRATS_X 100 TXT_CONGRATS_Y 62
++//     #elif defined(VERSION_CN)  PAUSE_X 123
++// These are NOT the US numbers this file compiles with (HISCORE 109/36,
++// CONGRATS 70/67, PAUSE_X 123): the coloured CN titles are a different size, so
++// iQue moved them. Since we build the US baseline those #elifs are unreachable,
++// hence the explicit CN_* copies. They are only read inside a CN_PACK_ACTIVE()
++// gate, so the vanilla path keeps its own constants.
++//
++// iQue anchors both lines at this single x (print_hud_lut_string does
++// "curX -= xOffset" on 0xFE), so these are left edges, not centres. Do not
++// substitute a centring calculation: the left-aligned origin is what puts the
++// glyphs where iQue does.
++#define CN_HUD_HISCORE_X 109
++#define CN_HUD_HISCORE_Y 26
++#define CN_HUD_CONGRATS_X 100
++#define CN_HUD_CONGRATS_Y 62
++#define CN_HUD_PAUSE_X 113
++#define CN_HUD_PAUSE_Y 81
++
+ void print_hud_pause_colorful_str(void) {
+-    INGAME_TEXT_COPY(textPause, TEXT_PAUSE);
++    INGAME_TEXT_COPY(textPause, TEXT_PAUSE, CN_LABEL_PAUSE);
+ 
+     gSPDisplayList(gDisplayListHead++, dl_rgba16_text_begin);
+     gDPSetEnvColor(gDisplayListHead++, 255, 255, 255, gDialogTextAlpha);
+ 
++#if defined(SM64COOPDX_CN_TEXT)
++    if (CN_PACK_ACTIVE()) {
++        // The coloured HUD font, not the IA8 dialog font. This is the whole point
++        // of the iQue release's title and it cannot be reproduced by tinting the
++        // monochrome glyphs: the two are different designs (IoU between the
++        // coloured cells and cn_glyphs_16x16.h peaks at 0.43).
++        static const u8 sPause[] = { CN_HUD_STR_PAUSE };
++        cn_draw_hud_title(CN_HUD_PAUSE_X, CN_HUD_PAUSE_Y, sPause);
++        gSPDisplayList(gDisplayListHead++, dl_rgba16_text_end);
++        return;
++    }
++#endif
++
+ #ifdef VERSION_EU
+     print_hud_lut_string(HUD_LUT_GLOBAL, get_str_x_pos_from_center_scale(
+                          SCREEN_WIDTH / 2, textPause, 12.0f), 81, textPause);
+@@ -2651,7 +3255,7 @@
+ 
+     u8 str[COURSE_STAGES_COUNT * 2];
+ 
+-    INGAME_TEXT_COPY(textStar, TEXT_STAR);
++    INGAME_TEXT_COPY(textStar, TEXT_STAR, CN_LABEL_STAR);
+ 
+     u8 starFlags = save_file_get_star_flags(fileNum, courseNum);
+     u16 starCount = save_file_get_course_star_count(fileNum, courseNum);
+@@ -2686,12 +3290,40 @@
+     print_generic_string(x + 14, y + 13, str);
+ }
+ 
++// What to hand the course-name renderer for a *main* course slot.
++//
++// The upstream renderer passes the table entry whole, and that is correct: the
++// 3-byte prefix on a vanilla main-course entry is not decoration, it is the
++// course number. Read straight out of the US ROM:
++//
++//   BOB    9E 01 9E "BOB-OMB BATTLEFIELD"      ->  " 1 BOB-OMB BATTLEFIELD"
++//   WF     9E 02 9E "WHISKY'S FOUNTAIN"        ->  " 2 ..."
++//   SL     01 00 9E "SLIPPERY SLIDE"          ->  " 10 ..."  (two-digit)
++//   BITDW  9E 9E 9E "BOWSER IN THE DARK WORLD" ->  no number, 3 blanks
++//
++// Only the star-select screen strips it, via &courseName[CRS_NAME_START],
++// because it draws "COURSE x" out of a separate column. The pause menu has no
++// such column, so skipping the prefix there silently deleted the number -- the
++// "关卡前应该有数字" bug. Hence main courses pass the base pointer, while the
++// secret-star / castle-star slots keep `+ 3`: their prefix is three blank
++// glyphs, so dropping it would shift the name left for no gain.
++//
++// The CN side needs no such test. iQue's course-name table carries NO 3-byte
++// prefix -- in the CN ROM the entry starts straight at the U+3000 run (checked
++// against the decompressed segment; official CRS_NAME_START is 6, i.e. three
++// two-byte tokens, not three bytes). Our generator prepends a synthetic
++// [9E][n][9E] so the `+ 3` call sites keep working, so CN buffers must still be
++// advanced past it.
++static const u8 *pause_castle_course_name_arg(const u8 *courseName) {
++    return cn_is_cn_string(courseName) ? courseName + 3 : courseName;
++}
++
+ void render_pause_castle_main_strings(s16 x, s16 y) {
+ #ifdef VERSION_EU
+     u8 textCoin[] = { TEXT_COIN };
+     u8 textX[] = { TEXT_VARIABLE_X };
+ #else
+-    INGAME_TEXT_COPY(textCoin, TEXT_COIN_X);
++    INGAME_TEXT_COPY(textCoin, TEXT_COIN_X, CN_LABEL_COIN_X);
+ #endif
+ 
+     u8 strVal[8];
+@@ -2725,12 +3357,15 @@
+     gSPDisplayList(gDisplayListHead++, dl_ia_text_begin);
+     gDPSetEnvColor(gDisplayListHead++, 255, 255, 255, gDialogTextAlpha);
+ 
+-    u8 courseNum = gDialogLineNum + 1;
+-    const u8 *courseName = (
+-        gDialogLineNum == COURSE_STAGES_COUNT ?
+-        ((const u8 **) get_course_name_table())[COURSE_MAX] : // Castle secret stars
+-        get_level_name_sm64(courseNum, get_level_num_from_course_num(courseNum), 1, 1)
+-    );
++    // Same rationale as render_pause_castle_main_strings_extended(): pull the
++    // name from the (CN-aware) course table rather than round-tripping it
++    // through the vanilla single-byte ASCII helpers.
++    const u8 *courseName;
++    {
++        void **courseNameTbl = get_course_name_table();
++        s32 slot = (gDialogLineNum == COURSE_STAGES_COUNT) ? COURSE_MAX : gDialogLineNum;
++        courseName = segmented_to_virtual(courseNameTbl[slot]);
++    }
+ 
+     if (gDialogLineNum < COURSE_STAGES_COUNT) {
+         render_pause_castle_course_stars(x, y, gCurrSaveFileNum - 1, gDialogLineNum);
+@@ -2744,23 +3379,120 @@
+         print_generic_string(x - 17, y + 30, courseName);
+ #endif
+     } else {
+-        INGAME_TEXT_COPY(textStarX, TEXT_STAR_X);
++        INGAME_TEXT_COPY(textStarX, TEXT_STAR_X, CN_LABEL_STAR_X);
+         print_generic_string(x + 40, y + 13, textStarX);
+         int_to_str(save_file_get_total_star_count(gCurrSaveFileNum - 1, COURSE_BONUS_STAGES - 1, COURSE_MAX - 1), strVal);
+         print_generic_string(x + 60, y + 13, strVal);
+ #ifdef VERSION_EU
+-        print_generic_string(get_str_x_pos_from_center(x + 51, courseName, 10.0f), y + 30, courseName);
++        print_generic_string(get_str_x_pos_from_center(x + 51, courseName + 3, 10.0f), y + 30, courseName + 3);
+ #endif
+     }
+ 
+ #ifndef VERSION_EU
+-    print_generic_string(x - 9, y + 30, courseName);
++    // Upstream draws the entry whole at x - 9. On a main course the 3-byte
++    // prefix IS the course number, so this is what puts "1" in front of
++    // "BOB-OMB BATTLEFIELD"; see pause_castle_course_name_arg().
++    print_generic_string(x - 9, y + 30, pause_castle_course_name_arg(courseName));
+ #endif
+ 
+     gSPDisplayList(gDisplayListHead++, dl_ia_text_end);
+ }
+ 
+ #define INDEX_CASTLE_STARS (COURSE_COUNT)
++
++// Returns the CN-aware course name for a 1-based course number, taken straight
++// from the (already pack-switched) course name table. Every entry carries the
++// vanilla 3-byte [colour][num][0x9E] prefix, so callers that want bare text add
++// + 3.
++//
++// Do NOT route this through get_level_name_sm64(): that helper round-trips
++// through convert_string_sm64_to_ascii()/convert_string_ascii_to_sm64(), which
++// only understand the vanilla single-byte font. CN course names came back as
++// spaces or raw bytes, which is why vanilla-looking glyphs kept showing up.
++// Strips the decoration the official iQue course names carry at their front:
++// U+3000, the full-width course number, U+3000 -- i.e. "　１　炸弹王国".
++//
++// `name + 3` only removes the vanilla 3-byte [colour][num][0x9E] prefix that the
++// generator emits, so the CN decoration survives it. That is harmless where the
++// name is drawn centred on its own (the star-select header), but the pause menu
++// lays the line out at fixed X positions and *already* prints the course number
++// of its own, so leaving it in put the number on screen twice and pushed the
++// name off its column.
++//
++// Only the leading run is removed, and only when it matches the exact pattern,
++// so a name that legitimately begins with a space keeps it.
++const u8 *cn_strip_course_name_decoration(const u8 *name) {
++    if (name == NULL || !cn_is_cn_string(name)) {
++        return name;
++    }
++
++    // Drop the vanilla 3-byte [colour][num][0x9E] prefix the generator emits.
++    const u8 *p = name + 3;
++    const u8 *const fallback = p;
++
++    // The decoration is a run of U+3000, then the course number, then another
++    // run of U+3000. Neither the number nor the space run has a fixed width:
++    // courses 10-15 encode "10".."15" as two ASCII tokens, and the secret-star
++    // slots have no number at all, just three U+3000. So consume tokens, not
++    // bytes.
++    //
++    // Note 0x00 0x00 is the digit '0' (iQue encodes full-width and half-width
++    // digits identically), NOT a terminator -- the only terminator is 0xFF 0xFF.
++    // Course 10 ("　１０　雪人王国") relies on this, so the number loop must not
++    // treat a zero byte as end-of-string. Bound it instead, so a name that is
++    // somehow all-digits cannot walk off the buffer.
++    while (p[0] == DIALOG_CHAR_TERMINATOR && p[1] == DIALOG_CHAR_SPACE) {
++        p += 2;
++    }
++    for (int guard = 0; guard < 4 && p[0] == 0x00; guard++) {
++        p += 2;
++    }
++
++    // Trailing U+3000 run. Requiring at least one space is what distinguishes a
++    // decorated name from a bare one; if there is none, keep the prefix so the
++    // caller still draws the whole string.
++    if (!(p[0] == DIALOG_CHAR_TERMINATOR && p[1] == DIALOG_CHAR_SPACE)) {
++        return fallback;
++    }
++
++    // Drop the whole trailing run, not just one space: the secret-star slots
++    // indent with three U+3000 and would otherwise keep two of them.
++    while (p[0] == DIALOG_CHAR_TERMINATOR && p[1] == DIALOG_CHAR_SPACE) {
++        p += 2;
++    }
++
++    return p;
++}
++
++const u8 *ingame_menu_get_course_name(s32 courseNum) {
++    void **courseNameTbl = get_course_name_table();
++    s32 slot = courseNum - 1;
++
++    if (slot < 0 || slot >= INDEX_CASTLE_STARS) {
++        return NULL;
++    }
++    return segmented_to_virtual(courseNameTbl[slot]);
++}
++
++// Returns the CN-aware act (star) name for a 1-based course number and 1-based
++// star number, taken straight from the (already pack-switched) act name table.
++// Unlike course names, act names carry no 3-byte prefix. Returns NULL when the
++// slot is out of range (e.g. the 100-coin / secret star rows), so callers can
++// fall back to the vanilla-generated string.
++const u8 *ingame_menu_get_act_name(s32 courseNum, s32 starNum) {
++    s32 courseIdx = courseNum - 1; // COURSE_BOB == 1 -> row 0
++    s32 actIdx = starNum - 1;
++
++    if (courseIdx < 0 || courseIdx >= COURSE_STAGES_MAX) {
++        return NULL;
++    }
++    if (actIdx < 0 || actIdx >= MAX_ACTS) {
++        return NULL;
++    }
++
++    void **actNameTbl = get_act_name_table();
++    return segmented_to_virtual(actNameTbl[courseIdx * MAX_ACTS + actIdx]);
++}
+ #define INDEX_FLAGS (COURSE_COUNT + 1)
+ #define INDEX_MIN (-1)
+ #define INDEX_MAX (INDEX_FLAGS + 1)
+@@ -2785,11 +3517,42 @@
+     return 0;
+ }
+ 
++
++
+ static void render_pause_castle_course_name(const u8 *courseName, s16 x, s16 y) {
+     s16 width = 0;
++    bool cn = cn_is_cn_string(courseName);
+ #ifndef VERSION_JP
+-    for (const u8 *c = courseName; *c != DIALOG_CHAR_TERMINATOR; c++) {
+-        width += gDialogCharWidths[*c];
++    // Token-wise walk so two-byte CN glyphs are measured once each and the
++    // course name is centred correctly. A byte-wise walk would also stop early
++    // on a CN newline.
++    {
++        s32 pos = 0;
++        for (s32 cap = 0; cap < 1024; cap++) {
++            CnToken tok = cn_read_token(courseName, pos, cn);
++
++            if (tok.kind == CN_TOKEN_END) {
++                break;
++            }
++            if (tok.kind) {
++                if (tok.kind == CN_TOKEN_GLYPH) {
++                    width += (s16)cn_char_width(tok.code);
++                } else if (tok.kind == CN_TOKEN_SPACE) {
++                    width += gDialogCharWidths[DIALOG_CHAR_SPACE];
++                }
++                pos += tok.length;
++                continue;
++            }
++            // Vanilla single-byte path. gDialogCharWidths has 256 entries, so
++            // the byte index is always in range, but the string still has to
++            // terminate: a CN buffer reached via this path would never hit
++            // 0xFF, hence the iteration cap above.
++            if (courseName[pos] == DIALOG_CHAR_TERMINATOR) {
++                break;
++            }
++            width += gDialogCharWidths[courseName[pos]];
++            pos++;
++        }
+     }
+ #endif
+     print_generic_string(x - width / 2, y, courseName);
+@@ -2853,7 +3616,7 @@
+ 
+     // Render the 100 coins star next to the coin counter for main courses
+     if (isMainCourse && (stars & 0x40)) {
+-        INGAME_TEXT_COPY(textStar, TEXT_STAR);
++        INGAME_TEXT_COPY(textStar, TEXT_STAR, CN_LABEL_STAR);
+         print_generic_string(x + 89, y - 5, textStar);
+     }
+ 
+@@ -2894,18 +3657,28 @@
+     gSPDisplayList(gDisplayListHead++, dl_ia_text_begin);
+     gDPSetEnvColor(gDisplayListHead++, 255, 255, 255, gDialogTextAlpha);
+ 
+-    u8 courseNum = gDialogLineNum + 1;
+-    const u8 *courseName = (
+-        gDialogLineNum >= INDEX_CASTLE_STARS ?
+-        ((const u8 **) get_course_name_table())[COURSE_MAX] : // Castle secret stars
+-        get_level_name_sm64(courseNum, get_level_num_from_course_num(courseNum), 1, 1)
+-    );
++    // Take the name straight from the course name table. Going through
++    // get_level_name_sm64() here used to round-trip the text through
++    // convert_string_sm64_to_ascii() -> convert_string_ascii_to_sm64(), which
++    // only understands the vanilla single-byte font: CN course names came back
++    // as runs of spaces / raw bytes and the renderer then produced garbage.
++    //
++    // The table is already switched by apply_cn_text_pack(), so this returns CN
++    // text when the pack is on and the vanilla ROM string when it is off.
++    // Main courses keep the base pointer (the 3-byte prefix holds the course
++    // number); see pause_castle_course_name_arg() for the full story.
++    const u8 *courseName;
++    {
++        void **courseNameTbl = get_course_name_table();
++        s32 slot = (gDialogLineNum >= INDEX_CASTLE_STARS) ? COURSE_MAX : gDialogLineNum;
++        courseName = segmented_to_virtual(courseNameTbl[slot]);
++    }
+ 
+     // Main courses (0-14)
+     if (gDialogLineNum < COURSE_STAGES_COUNT) {
+-        INGAME_TEXT_COPY(textCoin, TEXT_COIN_X);
++        INGAME_TEXT_COPY(textCoin, TEXT_COIN_X, CN_LABEL_COIN_X);
+         u8 textCoinCount[8];
+-        render_pause_castle_course_name(courseName, 160, y + 30);
++        render_pause_castle_course_name(pause_castle_course_name_arg(courseName), 160, y + 30);
+         render_pause_castle_course_stars_extended(x + 20, y);
+         print_generic_string(x + 54, y - 5, textCoin);
+         int_to_str(save_file_get_course_coin_score(gCurrSaveFileNum - 1, gDialogLineNum), textCoinCount);
+@@ -2920,7 +3693,7 @@
+ 
+     // Castle stars (25)
+     else if (gDialogLineNum == INDEX_CASTLE_STARS) {
+-        INGAME_TEXT_COPY(textStar, TEXT_STAR_X);
++        INGAME_TEXT_COPY(textStar, TEXT_STAR_X, CN_LABEL_STAR_X);
+         u8 textStarCount[8];
+         render_pause_castle_course_name(courseName + 3, 160, y + 30);
+         print_generic_string(x + 60, y + 13, textStar);
+@@ -3093,8 +3866,8 @@
+         { TEXT_HUD_CONGRATULATIONS_DE }
+     };
+ #else
+-    INGAME_TEXT_COPY(textHiScore, TEXT_HUD_HI_SCORE);
+-    INGAME_TEXT_COPY(textCongratulations, TEXT_HUD_CONGRATULATIONS);
++    INGAME_TEXT_COPY(textHiScore, TEXT_HUD_HI_SCORE, CN_LABEL_HUD_HI_SCORE);
++    INGAME_TEXT_COPY(textCongratulations, TEXT_HUD_CONGRATULATIONS, CN_LABEL_HUD_CONGRATULATIONS);
+ #endif
+ 
+     u8 colorFade = sins(gDialogColorFadeTimer) * 50.0f + 200.0f;
+@@ -3103,6 +3876,14 @@
+     gDPSetEnvColor(gDisplayListHead++, colorFade, colorFade, colorFade, 255);
+ 
+     if (str == HUD_PRINT_HISCORE) {
++#if defined(SM64COOPDX_CN_TEXT)
++        if (CN_PACK_ACTIVE()) {
++            static const u8 sHiScore[] = { CN_HUD_STR_HI_SCORE };
++            cn_draw_hud_title(CN_HUD_HISCORE_X, CN_HUD_HISCORE_Y, sHiScore);
++            gSPDisplayList(gDisplayListHead++, dl_rgba16_text_end);
++            return;
++        }
++#endif
+ #ifdef VERSION_EU
+         print_hud_lut_string(HUD_LUT_GLOBAL, get_str_x_pos_from_center_scale(160, textHiScore[gInGameLanguage], 12.0f),
+                   36, textHiScore[gInGameLanguage]);
+@@ -3110,6 +3891,14 @@
+         print_hud_lut_string(HUD_LUT_GLOBAL, TXT_HISCORE_X, TXT_HISCORE_Y, textHiScore);
+ #endif
+     } else { // HUD_PRINT_CONGRATULATIONS
++#if defined(SM64COOPDX_CN_TEXT)
++        if (CN_PACK_ACTIVE()) {
++            static const u8 sCongrats[] = { CN_HUD_STR_CONGRAT };
++            cn_draw_hud_title(CN_HUD_CONGRATS_X, CN_HUD_CONGRATS_Y, sCongrats);
++            gSPDisplayList(gDisplayListHead++, dl_rgba16_text_end);
++            return;
++        }
++#endif
+ #ifdef VERSION_EU
+         print_hud_lut_string(HUD_LUT_GLOBAL, get_str_x_pos_from_center_scale(160, textCongratulations[gInGameLanguage], 12.0f),
+                   67, textCongratulations[gInGameLanguage]);
+@@ -3210,9 +3999,9 @@
+     u8 textSymStar[] = { GLYPH_STAR, GLYPH_SPACE };
+ #define textCourse gTextCourseArr[gInGameLanguage]
+ #else
+-    INGAME_TEXT_COPY(textCourse, TEXT_COURSE);
+-    INGAME_TEXT_COPY(textCatch, TEXT_CATCH); // unused in US
+-    INGAME_TEXT_COPY(textClear, TEXT_CLEAR);
++    INGAME_TEXT_COPY(textCourse, TEXT_COURSE, CN_LABEL_COURSE);
++    INGAME_TEXT_COPY_UNUSED(textCatch, TEXT_CATCH, CN_LABEL_CATCH); // unused in US
++    INGAME_TEXT_COPY(textClear, TEXT_CLEAR, CN_LABEL_CLEAR);
+     u8 textSymStar[] = { GLYPH_STAR, GLYPH_SPACE };
+ #endif
+     u8 *name;
+@@ -3224,6 +4013,13 @@
+         play_star_fanfare_and_flash_hud(1, 1 << (gLastCompletedStarNum - 1));
+ 
+         name = (u8*) get_star_name_sm64(gLastCompletedCourseNum, gLastCompletedStarNum, 1);
++        // Prefer the CN-aware act name when available. get_star_name_sm64()
++        // round-trips through the vanilla single-byte font, so CN act names
++        // would degrade to spaces.
++        if (CN_PACK_ACTIVE()) {
++            const u8 *cnName = ingame_menu_get_act_name(gLastCompletedCourseNum, gLastCompletedStarNum);
++            if (cnName != NULL) { name = (u8 *)cnName; }
++        }
+ 
+         gSPDisplayList(gDisplayListHead++, dl_ia_text_begin);
+         int_to_str(gLastCompletedCourseNum, strCourseNum);
+@@ -3236,6 +4032,17 @@
+         gSPDisplayList(gDisplayListHead++, dl_ia_text_end);
+     } else if ((gLastCompletedCourseNum == COURSE_BITDW || gLastCompletedCourseNum == COURSE_BITFS) && gLastCollectedStarOrKey == 1) {
+         name = (u8*) get_level_name_sm64(gLastCompletedCourseNum, gCurrLevelNum, gCurrAreaIndex, 1) + 3;
++        // When the CN text pack is active the course name table already holds
++        // iQue names, so prefer it over the vanilla name returned above. Hand
++        // the *base* pointer to cn_strip_course_name_decoration() rather than
++        // `+ 3`: the iQue buffer carries "　N　" (U+3000 + full-width number +
++        // U+3000) on top of the vanilla prefix, and this screen prints the
++        // course number of its own right next to the name -- exactly like the
++        // pause header. Stripping it keeps that number from showing twice.
++        if (CN_PACK_ACTIVE()) {
++            const u8 *cnName = ingame_menu_get_course_name(gLastCompletedCourseNum);
++            if (cnName != NULL) { name = (u8 *)cn_strip_course_name_decoration(cnName); }
++        }
+         gSPDisplayList(gDisplayListHead++, dl_ia_text_begin);
+         gDPSetEnvColor(gDisplayListHead++, 0, 0, 0, gDialogTextAlpha);
+ #ifdef VERSION_EU
+@@ -3257,6 +4064,13 @@
+         return;
+     } else {
+         name = (u8*) get_level_name_sm64(gLastCompletedCourseNum, gLastCompletedStarNum, gCurrAreaIndex, 1) + 3;
++        // Same CN-preference as above (secret star / bonus course names), and
++        // the same decoration strip: this branch also prints the course number
++        // separately, so the name must not carry its own copy.
++        if (CN_PACK_ACTIVE()) {
++            const u8 *cnName = ingame_menu_get_course_name(gLastCompletedCourseNum);
++            if (cnName != NULL) { name = (u8 *)cn_strip_course_name_decoration(cnName); }
++        }
+         print_hud_course_complete_coins(118, 103);
+         play_star_fanfare_and_flash_hud(1, 1 << (gLastCompletedStarNum - 1));
+     }
+@@ -3336,10 +4150,10 @@
+ #define textContinueWithoutSave textContinueWithoutSaveArr[gInGameLanguage]
+     s16 xOffset = get_str_x_pos_from_center(160, textContinueWithoutSaveArr[gInGameLanguage], 12.0f);
+ #else
+-    INGAME_TEXT_COPY(textSaveAndContinue, TEXT_SAVE_AND_CONTINUE);
++    INGAME_TEXT_COPY(textSaveAndContinue, TEXT_SAVE_AND_CONTINUE, CN_LABEL_SAVE_AND_CONTINUE);
+     //u8 textSaveAndQuit[] = { TEXT_SAVE_AND_QUIT };
+     //u8 textSaveExitGame[] = { TEXT_SAVE_EXIT_GAME };
+-    INGAME_TEXT_COPY(textContinueWithoutSave, TEXT_CONTINUE_WITHOUT_SAVING);
++    INGAME_TEXT_COPY(textContinueWithoutSave, TEXT_CONTINUE_WITHOUT_SAVING, CN_LABEL_CONTINUE_WITHOUT_SAVING);
+ #endif
+ 
+     handle_menu_scrolling(MENU_SCROLL_VERTICAL, index, 1, 2); // decreased to '2' to prevent Exit Game
+--- a/src/game/ingame_menu.h
++++ b/src/game/ingame_menu.h
+@@ -151,6 +151,27 @@
+ void print_generic_string(s16 x, s16 y, const u8 *str);
+ void print_hud_lut_string(s8 hudLUT, s16 x, s16 y, const u8 *str);
+ void print_menu_generic_string(s16 x, s16 y, const u8 *str);
++
++// CN-aware course / act (star) name lookups.
++//
++// These read the *live* seg2_course_name_table / seg2_act_name_table, which
++// apply_cn_text_pack() repoints at the iQue strings, so they follow the runtime
++// Chinese toggle. Prefer them over get_level_name_sm64()/get_star_name_sm64():
++// those round-trip through convert_string_sm64_to_ascii()/ascii_to_sm64(),
++// which only understand the vanilla single-byte font, so Chinese names come
++// back as spaces.
++//
++// Course names keep the vanilla 3-byte [colour][num][0x9E] prefix; callers that
++// want bare text pass `+ 3`. Act names carry no prefix.
++// Both return NULL when the slot is out of range.
++const u8 *ingame_menu_get_course_name(s32 courseNum);
++const u8 *ingame_menu_get_act_name(s32 courseNum, s32 starNum);
++
++// Strips the leading U+3000 + course number + U+3000 from an iQue course
++// name. Returns a pointer inside the same buffer (never a copy), or `name + 3`
++// when the CN decoration is absent. Defined in ingame_menu.c, used by the
++// pause menu header where the number is already drawn separately.
++const u8 *cn_strip_course_name_decoration(const u8 *name);
+ void handle_menu_scrolling(s8 scrollDirection, s8 *currentIndex, s8 minIndex, s8 maxIndex);
+ #if defined(VERSION_US) || defined(VERSION_EU)
+ s16 get_str_x_pos_from_center(s16 centerPos, u8 *str, f32 scale);
+--- a/src/game/level_info.c
++++ b/src/game/level_info.c
+@@ -9,6 +9,7 @@
+ #include "level_table.h"
+ #include "save_file.h"
+ #include "types.h"
++#include "game/cn_font.h"
+ #include "pc/lua/utils/smlua_level_utils.h"
+ #include "pc/lua/utils/smlua_text_utils.h"
+ 
+@@ -177,10 +178,13 @@
+ u8 *convert_string_ascii_to_sm64(u8 *str64, const char *strAscii, bool menu) {
+     if (!strAscii) { return str64; }
+ 
++    size_t asciiLen = strlen(strAscii);
++
+     // allocate string with maximum size
+     bool shouldResizeString = false;
++    size_t capacity = ASCII_TO_SM64_MAX_CHAR_SIZE * asciiLen + 1;
+     if (!str64) {
+-        str64 = malloc(ASCII_TO_SM64_MAX_CHAR_SIZE * strlen(strAscii) + 1);
++        str64 = malloc(capacity);
+         if (!str64) {
+             return NULL;
+         }
+@@ -194,6 +198,22 @@
+     }
+     *(str64End++) = 0xFF;
+ 
++    // Terminate a caller-supplied scratch buffer past the end of the string.
++    //
++    // The name helpers below pass a `static` buffer that survives between calls,
++    // and only the string itself plus one terminator gets written. A renderer
++    // that walks past the 0xFF -- or a caller that reads the tail -- would then
++    // see the *previous*, longer name's leftovers; that is how one line of
++    // act-select text ended up showing several course names at once, clipped at
++    // both screen edges.
++    //
++    // Only done for buffers we allocated ourselves: growing someone else's
++    // buffer past what they sized is not ours to do (and for a heap buffer the
++    // realloc below would then account for the padding).
++    if (!shouldResizeString && capacity > (size_t) (str64End - str64) + 1) {
++        *(str64End++) = 0xFF;
++    }
++
+     // resize string if it was allocated by this function
+     if (shouldResizeString) {
+         u8 *resizedStr64 = realloc(str64, (size_t) (str64End - str64));
+@@ -211,9 +231,43 @@
+     return (size_t) (str64 - str64Begin);
+ }
+ 
++// True when `str64` is one of the compiled-in CN buffers rather than a
++// vanilla ROM string.
++//
++// This has to be a *pointer* test, not a "the pack is on" test: these helpers
++// also serve legitimately-vanilla strings while the CN pack is active (the
++// "*_original" mirror tables, the synthetic castle/ending names, Lua overrides),
++// and those must keep round-tripping through ASCII as before.
++//
++// Why it matters: convert_string_sm64_to_ascii() decodes strictly one byte at a
++// time and only looks for a 0xFF terminator. A CN buffer is two-byte tokens
++// terminated by 0xFF 0xFF, so feeding it in here mistranslates every lead byte
++// as if it were a single-byte glyph index. Worse, the callers' `static` scratch
++// buffers are only overwritten for strlen+1 bytes, so whatever the *previous*
++// longer name left behind stays queued up behind the terminator -- that is what
++// made the act select screen paint several course names concatenated on one
++// line, clipped at both screen edges.
++static bool sm64_is_cn_text(const u8 *str64) {
++#if defined(SM64COOPDX_CN_TEXT)
++    return cn_is_cn_string(str64);
++#else
++    (void) str64;
++    return false;
++#endif
++}
++
+ char *convert_string_sm64_to_ascii(char *strAscii, const u8 *str64) {
+     if (!str64) { return strAscii; }
+ 
++    // A CN buffer cannot be expressed as single-byte text. Bail out with an
++    // empty string rather than emitting mojibake; every in-game caller has a CN
++    // path that reads the table pointer directly.
++    if (sm64_is_cn_text(str64)) {
++        if (strAscii) { strAscii[0] = '\0'; }
++        return strAscii;
++    }
++    if (!str64) { return strAscii; }
++
+     // allocate string with maximum size
+     bool shouldResizeString = false;
+     if (!strAscii) {
+@@ -361,7 +415,18 @@
+ 
+     else if (!hasCustomName) {
+         if (courseNum >= COURSE_MIN && courseNum < COURSE_MAX) {
+-            void **courseNameTbl = get_course_name_table();
++            // Always read the *_original mirror, never the live table.
++            //
++            // This function's contract is single-byte ASCII, and when the CN
++            // pack is on apply_cn_text_pack() has repointed the live course
++            // table at two-byte CN token buffers. Feeding one of those to
++            // convert_string_sm64_to_ascii() hits its deliberate "a CN buffer
++            // cannot be expressed as ASCII" guard, which returns an EMPTY
++            // string -- so every Lua get_level_name()/get_level_name_ascii()
++            // call (and the DJUI player list / "entered course" popups) showed
++            // blank names. The in-game Chinese displays do not use this helper;
++            // they read the CN table directly through ingame_menu_get_*_name().
++            void **courseNameTbl = get_course_name_table_original();
+             const u8 *courseName = segmented_to_virtual(courseNameTbl[courseNum - COURSE_BOB]);
+             convert_string_sm64_to_ascii(output, courseName + 3);
+             charCase = MIN(charCase, 0); // Don't need to capitalize vanilla course names
+@@ -428,7 +493,10 @@
+     // Main courses: BOB to RR
+     else if (COURSE_IS_MAIN_COURSE(courseNum)) {
+         if (starIndex >= 0 && starIndex < MAX_ACTS) {
+-            void **actNameTable = get_act_name_table();
++            // Same reasoning as get_level_name_ascii(): the live act table is
++            // CN-swapped while the pack is on, and a CN buffer converts to an
++            // empty ASCII string. Keep the Lua/DJUI side on the vanilla mirror.
++            void **actNameTable = get_act_name_table_original();
+             const u8 *starName = segmented_to_virtual(actNameTable[(courseNum - COURSE_BOB) * MAX_ACTS + starIndex]);
+             convert_string_sm64_to_ascii(output, starName);
+             charCase = MIN(charCase, 0); // Don't need to capitalize vanilla act names
+--- a/src/game/print.c
++++ b/src/game/print.c
+@@ -6,6 +6,7 @@
+ #include "memory.h"
+ #include "print.h"
+ #include "segment2.h"
++#include "cn_font.h"
+ #include "game/rendering_graph_node.h"
+ 
+ /**
+@@ -445,6 +446,29 @@
+ 
+     for (i = 0; i < sTextLabelsCount; i++) {
+         for (j = 0; j < sTextLabels[i]->length; j++) {
++#if defined(SM64COOPDX_CN_TEXT)
++            // iQue pseudo-glyphs: bytes >= 0xA0 that are not plain font cells.
++            // 0xB0 ("按") is a 2x2 block of coloured HUD cells, so
++            // char_to_glyph_index() returns GLYPH_SPACE for it and the vanilla
++            // path would silently drop it. Expand it here, in the render pass,
++            // exactly like the official CN render_text_labels().
++            if (gCnTextPackActive && (u8) sTextLabels[i]->buffer[j] == 0xB0) {
++                // Centre the 32x32 block on the label's horizontal anchor -- the
++                // x print_text_centered() was given: it stored x - length*12/2, so
++                // adding length*6 recovers the centre.
++                s32 anchor = (s32) sTextLabels[i]->x + sTextLabels[i]->length * 6;
++
++                // Vertically, the block takes the place of the 16px "PRESS" line
++                // whose screen top is (224 - labelY). It is 32px tall, i.e. 16px
++                // taller, so bottom-align it with that line and let it grow
++                // upward -- otherwise its second row would run into the "START"
++                // line directly below (verified by .workbuddy/sim_cn_intro_layout.py).
++                s32 topY = (224 - (s32) sTextLabels[i]->y) - 16;
++
++                cn_draw_hud_pseudo(anchor - 16, topY, 0xB0);
++                continue;
++            }
++#endif
+             glyphIndex = char_to_glyph_index(sTextLabels[i]->buffer[j]);
+ 
+             if (glyphIndex != GLYPH_SPACE) {
+--- a/src/game/segment2.h
++++ b/src/game/segment2.h
+@@ -9,6 +9,17 @@
+ extern u8* seg2_course_name_table_original[];
+ extern u8* seg2_act_name_table[];
+ extern u8* seg2_act_name_table_original[];
++
++#if defined(SM64COOPDX_CN_TEXT)
++// Non-zero when the Chinese (iQue) text pack is the active source for the
++// in-game dialog and course/act name tables. Set from configChineseText.
++extern u8 gCnTextPackActive;
++// Repoint every dialog entry and course/act name slot at the active pack.
++void apply_cn_text_pack(void);
++// Runtime switch used by the MISC settings checkbox: flips the pack, re-applies
++// the tables and persists configChineseText.
++void chinese_text_pack_set_active(bool active);
++#endif
+ extern const Gfx dl_rgba16_text_begin[];
+ extern const Gfx dl_rgba16_text_end[];
+ extern const Gfx dl_ia_text_begin[];
+--- a/src/menu/file_select.c
++++ b/src/menu/file_select.c
+@@ -2324,11 +2324,11 @@
+ #endif
+ 
+ #ifndef VERSION_EU
+-    INGAME_TEXT_COPY(textEraseFile, TEXT_ERASE_FILE);
+-    INGAME_TEXT_COPY(textSure, TEXT_SURE);
+-    INGAME_TEXT_COPY(textNoSavedDataExists, TEXT_NO_SAVED_DATA_EXISTS);
+-    INGAME_TEXT_COPY(textMarioAJustErased, TEXT_FILE_MARIO_A_JUST_ERASED);
+-    INGAME_TEXT_COPY(textSavedDataExists, TEXT_SAVED_DATA_EXISTS);
++    INGAME_TEXT_COPY(textEraseFile, TEXT_ERASE_FILE, CN_LABEL_NONE);
++    INGAME_TEXT_COPY(textSure, TEXT_SURE, CN_LABEL_NONE);
++    INGAME_TEXT_COPY(textNoSavedDataExists, TEXT_NO_SAVED_DATA_EXISTS, CN_LABEL_NONE);
++    INGAME_TEXT_COPY_MUTABLE(textMarioAJustErased, TEXT_FILE_MARIO_A_JUST_ERASED);
++    INGAME_TEXT_COPY(textSavedDataExists, TEXT_SAVED_DATA_EXISTS, CN_LABEL_NONE);
+ #endif
+ 
+     switch (messageID) {
+@@ -2492,7 +2492,7 @@
+ #endif
+ 
+ #ifndef VERSION_EU
+-    INGAME_TEXT_COPY(textSoundSelect, TEXT_SOUND_SELECT);
++    INGAME_TEXT_COPY(textSoundSelect, TEXT_SOUND_SELECT, CN_LABEL_NONE);
+ #endif
+ 
+     // Print "SOUND SELECT" text
+@@ -2565,7 +2565,7 @@
+  */
+ void print_score_file_castle_secret_stars(s8 fileIndex, s16 x, s16 y) {
+     unsigned char secretStarsText[20];
+-    INGAME_TEXT_COPY(textStarX, TEXT_STAR_X);
++    INGAME_TEXT_COPY(textStarX, TEXT_STAR_X, CN_LABEL_STAR_X);
+     // Print "[star] x"
+     print_menu_generic_string(x, y, textStarX);
+     // Print number of castle secret stars
+@@ -2594,8 +2594,8 @@
+ void print_score_file_course_coin_score(s8 fileIndex, s16 courseIndex, s16 x, s16 y) {
+     unsigned char coinScoreText[20];
+     u8 stars = save_file_get_star_flags(fileIndex, courseIndex);
+-    INGAME_TEXT_COPY(textCoinX, TEXT_COIN_X);
+-    INGAME_TEXT_COPY(textStar, TEXT_STAR);
++    INGAME_TEXT_COPY(textCoinX, TEXT_COIN_X, CN_LABEL_COIN_X);
++    INGAME_TEXT_COPY(textStar, TEXT_STAR, CN_LABEL_STAR);
+ #if defined(VERSION_JP) || defined(VERSION_SH)
+     #define LENGTH 5
+ #else
+@@ -2689,15 +2689,15 @@
+  */
+ void print_save_file_scores(s8 fileIndex) {
+ #ifndef VERSION_EU
+-    INGAME_TEXT_COPY(textMario, TEXT_MARIO);
++    INGAME_TEXT_COPY(textMario, TEXT_MARIO, CN_LABEL_MARIO);
+ #ifdef VERSION_JP
+     unsigned char textFileLetter[] = { TEXT_ZERO };
+     void **levelNameTable = segmented_to_virtual(seg2_course_name_table);
+ #endif
+-    INGAME_TEXT_COPY(textHiScore, TEXT_HI_SCORE);
+-    INGAME_TEXT_COPY(textMyScore, TEXT_MY_SCORE);
++    INGAME_TEXT_COPY(textHiScore, TEXT_HI_SCORE, CN_LABEL_NONE);
++    INGAME_TEXT_COPY(textMyScore, TEXT_MY_SCORE, CN_LABEL_MY_SCORE);
+ #if defined(VERSION_US) || defined(VERSION_SH)
+-    INGAME_TEXT_COPY(textFileLetter, TEXT_ZERO);
++    INGAME_TEXT_COPY_MUTABLE(textFileLetter, TEXT_ZERO);
+     void **levelNameTable = segmented_to_virtual(seg2_course_name_table);
+ #endif
+ #else
+--- a/src/menu/ingame_text.h
++++ b/src/menu/ingame_text.h
+@@ -1,11 +1,49 @@
+ #pragma once
+ 
+-#define INGAME_TEXT_COPY(_var, _text) \
+-u8 _var[_text ## _LENGTH]; \
+-memcpy(_var, g ## _text, _text ## _LENGTH)
++#include "game/cn_font.h"
++
++// Declares `_var` as a `const u8 *` that points at the CN translation when the
++// text pack is active, and at a private stack copy of the vanilla ROM string
++// otherwise.
++//
++// The old form of this macro allocated a fixed-size array and memcpy'd into it:
++//     u8 _var[TEXT_STAR_LENGTH]; memcpy(_var, gTEXT_STAR, TEXT_STAR_LENGTH);
++// That cannot work for CN text, because a two-byte-per-character encoding has
++// no fixed relationship to the vanilla single-byte length -- "STAR" is 2 bytes
++// of vanilla but "星星" is 6 bytes of CN. Copying into the vanilla-sized array
++// would overflow it. Pointing at the shared read-only CN array sidesteps the
++// length problem entirely; the stack copy only has to be big enough for the
++// vanilla string, which is what TEXT_*_LENGTH already describes.
++//
++// `_id` is a CNLabelId from cn_font.h. Every vanilla render entry point takes
++// `const u8 *`, so the call sites need no changes beyond naming the label.
++#define INGAME_TEXT_COPY(_var, _text, _id) \
++    u8 _var ## _vanilla[_text ## _LENGTH]; \
++    memcpy(_var ## _vanilla, g ## _text, _text ## _LENGTH); \
++    const u8 *_var = cn_label_get(_id) ? cn_label_get(_id) \
++                                       : (const u8 *)_var ## _vanilla
+ 
+ #define INGAME_TEXT_PTR(_text) g ## _text
+ 
++// Mutable variant, for the call sites that overwrite the buffer after copying
++// (star_select's per-star number, file_select's save-slot letter and the
++// "MARIO A JUST ERASED" slot digit). Those all take CN_LABEL_NONE -- they hold
++// a digit or a letter, not translatable text -- but they must stay writable, so
++// they cannot use the const pointer form above.
++#define INGAME_TEXT_COPY_MUTABLE(_var, _text) \
++    u8 _var[_text ## _LENGTH]; \
++    memcpy(_var, g ## _text, _text ## _LENGTH)
++
++// Same, for a label the current build never draws (textCatch is US-unused).
++// __attribute__((unused)) has to sit on the pointer declaration itself, because
++// the macro now expands to a statement sequence rather than one declaration --
++// so the old "UNUSED u8 x[] = {...}" prefix no longer reaches it.
++#define INGAME_TEXT_COPY_UNUSED(_var, _text, _id) \
++    u8 _var ## _vanilla[_text ## _LENGTH]; \
++    memcpy(_var ## _vanilla, g ## _text, _text ## _LENGTH); \
++    const u8 *_var __attribute__((unused)) = \
++        cn_label_get(_id) ? cn_label_get(_id) : (const u8 *)_var ## _vanilla
++
+ #define TEXT_ZERO_LENGTH 2
+ #define TEXT_COIN_LENGTH 2
+ #define TEXT_STAR_LENGTH 2
+--- a/src/menu/intro_geo.c
++++ b/src/menu/intro_geo.c
+@@ -110,7 +110,19 @@
+         guScale(scaleMat, scaleX, scaleY, scaleZ);
+ 
+         gSPMatrix(dlIter++, scaleMat, G_MTX_MODELVIEW | G_MTX_MUL | G_MTX_PUSH);
++#if defined(SM64COOPDX_CN_TEXT)
++        // iQue replaced the wordmark mesh outright: the CN vertex block ends at
++        // 0x7A60 while the US one ends at 0x7E60, so this is a different model,
++        // not a texture swap. Both variants use the same scale tables and the
++        // same camera, which is why the CN data can drop straight in.
++        if (gCnTextPackActive) {
++            gSPDisplayList(dlIter++, cn_dl_logo);         // 神游马力欧
++        } else {
++            gSPDisplayList(dlIter++, &intro_seg7_dl_0700B3A0);
++        }
++#else
+         gSPDisplayList(dlIter++, &intro_seg7_dl_0700B3A0);  // draw model
++#endif
+         gSPPopMatrix(dlIter++, G_MTX_MODELVIEW);
+         gSPEndDisplayList(dlIter);
+ 
+@@ -145,7 +157,17 @@
+                 gDPSetRenderMode(dlIter++, G_RM_AA_XLU_SURF, G_RM_AA_XLU_SURF2);
+                 break;
+         }
++#if defined(SM64COOPDX_CN_TEXT)
++        // The CN card carries two copyright lines plus the TM mark; the US card
++        // has one line and no separate TM quad.
++        if (gCnTextPackActive) {
++            gSPDisplayList(dlIter++, cn_dl_copyright);
++        } else {
++            gSPDisplayList(dlIter++, &intro_seg7_dl_0700C6A0);  // draw model
++        }
++#else
+         gSPDisplayList(dlIter++, &intro_seg7_dl_0700C6A0);  // draw model
++#endif
+         gSPEndDisplayList(dlIter);
+ 
+         // Once the "Super Mario 64" logo has just about zoomed fully, fade in the "TM" and copyright text
+--- a/src/menu/intro_geo.h
++++ b/src/menu/intro_geo.h
+@@ -5,6 +5,14 @@
+ #include <PR/gbi.h>
+ 
+ #include "types.h"
++
++#if defined(SM64COOPDX_CN_TEXT)
++// Baked iQue title-intro geometry (src/menu/cn_intro_data.c). The wordmark and
++// the copyright card are compiled-in copies rather than ROM overlays because
++// the CN mesh has a different vertex count, which shifts the segment layout.
++extern const Gfx cn_dl_logo[];
++extern const Gfx cn_dl_copyright[];
++#endif
+ #include "engine/graph_node.h"
+ 
+ extern bool gSkipInterpolationTitleScreen;
+--- a/src/menu/star_select.c
++++ b/src/menu/star_select.c
+@@ -8,6 +8,7 @@
+ #include "engine/graph_node.h"
+ #include "eu_translation.h"
+ #include "game/area.h"
++#include "game/cn_font.h"
+ #include "game/game_init.h"
+ #include "game/ingame_menu.h"
+ #include "game/level_update.h"
+@@ -279,12 +280,32 @@
+ #ifdef VERSION_EU
+     unsigned char myScore[][10] = { {TEXT_MYSCORE}, {TEXT_MY_SCORE_FR}, {TEXT_MY_SCORE_DE} };
+ #else
+-    INGAME_TEXT_COPY(myScore, TEXT_MYSCORE);
++    // "MYSCORE" is one of the fixed labels the CN pack does translate, so this
++    // must ask for the label rather than pass CN_LABEL_NONE (which is what made
++    // this screen keep printing "MYSCORE" while the pause menu said 我的积分).
++    INGAME_TEXT_COPY(myScore, TEXT_MYSCORE, CN_LABEL_MY_SCORE);
+ #endif
+-    INGAME_TEXT_COPY(starNumbers, TEXT_ZERO);
++    INGAME_TEXT_COPY_MUTABLE(starNumbers, TEXT_ZERO);
+ 
+     const u8 *currLevelName = get_level_name_sm64(gCurrCourseNum, gCurrLevelNum, gCurrAreaIndex, 1);
++    // Prefer the CN-aware course table. get_level_name_sm64() round-trips the
++    // text through convert_string_sm64_to_ascii()/ascii_to_sm64(), which only
++    // understands the vanilla single-byte font, so Chinese course names come
++    // back as spaces. The table itself already holds iQue names once
++    // apply_cn_text_pack() has run, so this also follows the runtime toggle.
++    {
++        const u8 *cnName = ingame_menu_get_course_name(gCurrCourseNum);
++        if (cnName != NULL) { currLevelName = cnName; }
++    }
++
+     const u8 *selectedActName = get_star_name_sm64(gCurrCourseNum, sSelectedActIndex + 1, 1);
++    // Same for the act (star) name -- the vanilla helper mangles CN text too.
++    // Returns NULL for slots the CN table does not cover (secret courses and
++    // the synthetic 100-coin star), where we keep the vanilla string.
++    {
++        const u8 *cnName = ingame_menu_get_act_name(gCurrCourseNum, sSelectedActIndex + 1);
++        if (cnName != NULL) { selectedActName = cnName; }
++    }
+ #ifndef VERSION_EU
+     s16 lvlNameX;
+     s16 actNameX;
+@@ -309,16 +330,24 @@
+ #ifdef VERSION_EU
+         print_generic_string(95, 118, myScore[language]);
+ #else
+-        print_generic_string(102, 118, myScore);
++        // "我的积分" is 4 full-width cells (64px) where "MYSCORE" is 8 narrow
++        // ones (~48px), so the label has to start further left or it runs into
++        // the coin counter at x = 155. The official iQue build uses 89 here.
++        print_generic_string(cn_is_cn_string(myScore) ? 89 : 102, 118, myScore);
+ #endif
+     }
+ 
+     if ((gOverrideHideActSelectHud & ACT_SELECT_HUD_LEVEL_NAME) == 0 && currLevelName != NULL) {
++        // A CN course name is a 16px cell (two stacked 8px halves) where the
++        // vanilla name is 8px tall, so lift the line by half the extra height to
++        // keep it centred on the same spot. The official iQue build makes the
++        // same correction (it moves this line from y = 33 to y = 30).
++        s16 lvlNameY = cn_is_cn_string(currLevelName) ? 30 : 33;
+ #ifdef VERSION_EU
+-        print_generic_string(get_str_x_pos_from_center(160, (u8*) currLevelName + 3, 10.0f), 33, currLevelName + 3);
++        print_generic_string(get_str_x_pos_from_center(160, (u8*) currLevelName + 3, 10.0f), lvlNameY, currLevelName + 3);
+ #else
+         lvlNameX = get_str_x_pos_from_center(160, (u8*) currLevelName + 3, 10.0f);
+-        print_generic_string(lvlNameX, 33, currLevelName + 3);
++        print_generic_string(lvlNameX, lvlNameY, currLevelName + 3);
+ #endif
+     }
+ 
+@@ -335,11 +364,26 @@
+     gDPSetEnvColor(gDisplayListHead++, 0, 0, 0, 255);
+     // Print the name of the selected act.
+     if ((gOverrideHideActSelectHud & ACT_SELECT_HUD_ACT_NAME) == 0 && sVisibleStars != 0) {
++        // print_menu_generic_string() now walks CN two-byte tokens and draws the
++        // CJK cell through our own display list. Without that walk a byte-wise
++        // terminator test stops on the very first byte, because every CN act
++        // name starts with a full-width space (0xFF 0x9E) -- the line would come
++        // out blank.
++        //
++        // A CN glyph is 16px tall against the vanilla 8px, so lift the line by
++        // half the difference to keep it centred where it was.
++        //
++        // (The official iQue build instead reroutes this line through the dialog
++        // pipeline -- dl_ia_text_begin + print_generic_string -- and moves it to
++        // y = 141. That 60px jump is a layout change, not a font-metric one, so
++        // we deliberately keep the vanilla position here and only correct for
++        // the taller cell.)
++        s16 actNameY = cn_is_cn_string(selectedActName) ? 77 : 81;
+ #ifdef VERSION_EU
+-        print_menu_generic_string(get_str_x_pos_from_center(ACT_NAME_X, (u8*) selectedActName, 8.0f), 81, selectedActName);
++        print_menu_generic_string(get_str_x_pos_from_center(ACT_NAME_X, (u8*) selectedActName, 8.0f), actNameY, selectedActName);
+ #else
+         actNameX = get_str_x_pos_from_center(ACT_NAME_X, (u8*) selectedActName, 8.0f);
+-        print_menu_generic_string(actNameX, 81, selectedActName);
++        print_menu_generic_string(actNameX, actNameY, selectedActName);
+ #endif
+     }
+ 
+--- a/src/pc/configfile.c
++++ b/src/pc/configfile.c
+@@ -219,6 +219,8 @@
+ bool         configMenuDemos                      = false;
+ bool         configDisablePopups                  = false;
+ char         configLanguage[MAX_CONFIG_STRING]    = "";
++bool         configChineseText                    = true;
++bool         configChineseTextPrompted            = false;
+ bool         configForce4By3                      = false;
+ bool         configDynosLocalPlayerModelOnly      = false;
+ unsigned int configPvpType                        = PLAYER_PVP_CLASSIC;
+@@ -383,6 +385,8 @@
+     // {.name = "coop_menu_demos",                .type = CONFIG_TYPE_BOOL,   .boolValue   = &configMenuDemos},
+     {.name = "disable_popups",                 .type = CONFIG_TYPE_BOOL,   .boolValue   = &configDisablePopups},
+     {.name = "language",                       .type = CONFIG_TYPE_STRING, .stringValue = (char*)&configLanguage, .maxStringLength = MAX_CONFIG_STRING},
++    {.name = "chinese_text",                   .type = CONFIG_TYPE_BOOL,   .boolValue   = &configChineseText},
++    {.name = "chinese_text_prompted",          .type = CONFIG_TYPE_BOOL,   .boolValue   = &configChineseTextPrompted},
+     {.name = "force_4by3",                     .type = CONFIG_TYPE_BOOL,   .boolValue   = &configForce4By3},
+     {.name = "dynos_local_player_model_only",  .type = CONFIG_TYPE_BOOL,   .boolValue   = &configDynosLocalPlayerModelOnly},
+     // CoopNet settings
+--- a/src/pc/configfile.h
++++ b/src/pc/configfile.h
+@@ -165,6 +165,11 @@
+ extern bool         configMenuDemos;
+ extern bool         configDisablePopups;
+ extern char         configLanguage[MAX_CONFIG_STRING];
++// Chinese (iQue) text pack: when true the in-game dialog and course/act name
++// tables use the Simplified-Chinese data compiled from the official iQue
++// sources. When false the vanilla US text is used instead.
++extern bool         configChineseText;
++extern bool         configChineseTextPrompted;
+ extern bool         configForce4By3;
+ extern bool         configDynosLocalPlayerModelOnly;
+ extern unsigned int configPvpType;
+--- a/src/pc/dialog_table.c
++++ b/src/pc/dialog_table.c
+@@ -8,6 +8,7 @@
+ #include "game/level_info.h"
+ #include "pc/platform.h"
+ #include <stdlib.h>
++#include <string.h>
+ 
+ DialogTable *gDialogTable = NULL;
+ 
+@@ -57,6 +58,42 @@
+     return gDialogTable->buffer[dialogId];
+ }
+ 
++// Re-copy every vanilla entry from seg2_dialog_original[].
++//
++// dialog_table_init() runs before chinese_text_pack_init(), so its memcpy sees
++// the *static initialiser* values: in a CN build that is the Chinese string but
++// the US linesPerBox (the initialiser comes from dialogs.h, which does not know
++// about the pack). apply_cn_text_pack() only rewrites the originals, never
++// these heap copies, so the renderer kept paginating with 3 lines for a dialog
++// iQue gives 4 -- the race with Koopa the Quick overflowed its box and broke
++// two lines early. The same staleness made the runtime toggle look like a
++// no-op for dialogs (the copies still pointed at the previous set).
++//
++// Entries flagged `replaced` belong to the Lua text layer and are left alone.
++void dialog_table_sync_vanilla(void) {
++    u32 i;
++
++    if (gDialogTable == NULL) { return; }
++
++    for (i = 0; i < DIALOG_COUNT && i < gDialogTable->count; i++) {
++        struct DialogEntry *dialog = gDialogTable->buffer[i];
++        const struct DialogEntry *orig;
++        char *oldText;
++
++        if (dialog == NULL || dialog->replaced) { continue; }
++
++        orig = smlua_text_utils_dialog_get_unmodified(i);
++        if (orig == NULL) { continue; }
++
++        // `str` belongs to the original (static data) -- only `text` was
++        // allocated by convert_string_sm64_to_ascii().
++        oldText = dialog->text;
++        memcpy(dialog, orig, sizeof(struct DialogEntry));
++        dialog->text = convert_string_sm64_to_ascii(NULL, dialog->str);
++        free(oldText);
++    }
++}
++
+ void dialog_table_reset(void) {
+     DialogTable *table = gDialogTable;
+ 
+--- a/src/pc/dialog_table.h
++++ b/src/pc/dialog_table.h
+@@ -11,6 +11,7 @@
+ void dialog_table_init(void);
+ struct DialogEntry* dialog_table_alloc(s32 *dialogId);
+ struct DialogEntry* dialog_table_get(s32 dialogId);
++void dialog_table_sync_vanilla(void);
+ void dialog_table_reset(void);
+ void dialog_table_shutdown(void);
+ 
+--- a/src/pc/djui/djui_panel_confirm.c
++++ b/src/pc/djui/djui_panel_confirm.c
+@@ -3,7 +3,9 @@
+ #include "djui_panel_menu.h"
+ #include "pc/utils/misc.h"
+ 
+-void djui_panel_confirm_create(struct DjuiBase* caller, char* title, char* message, void (*on_yes_click)(struct DjuiBase*)) {
++void djui_panel_confirm_create_ex(struct DjuiBase* caller, char* title, char* message,
++                                  void (*on_yes_click)(struct DjuiBase*),
++                                  void (*on_no_click)(struct DjuiBase*)) {
+     struct DjuiThreePanel* panel = djui_panel_menu_create(title, false);
+     struct DjuiBase* body = djui_three_panel_get_body(panel);
+     {
+@@ -21,10 +23,15 @@
+ 
+         struct DjuiRect* rect1 = djui_rect_container_create(body, 64);
+         {
+-            djui_button_left_create(&rect1->base, DLANG(MENU, NO), DJUI_BUTTON_STYLE_NORMAL, djui_panel_menu_back);
++            djui_button_left_create(&rect1->base, DLANG(MENU, NO), DJUI_BUTTON_STYLE_NORMAL,
++                                    on_no_click ? on_no_click : djui_panel_menu_back);
+             djui_button_right_create(&rect1->base, DLANG(MENU, YES), DJUI_BUTTON_STYLE_NORMAL, on_yes_click);
+         }
+     }
+ 
+     djui_panel_add(caller, panel, NULL);
+ }
++
++void djui_panel_confirm_create(struct DjuiBase* caller, char* title, char* message, void (*on_yes_click)(struct DjuiBase*)) {
++    djui_panel_confirm_create_ex(caller, title, message, on_yes_click, NULL);
++}
+--- a/src/pc/djui/djui_panel_confirm.h
++++ b/src/pc/djui/djui_panel_confirm.h
+@@ -2,4 +2,9 @@
+ #include "djui.h"
+ 
+ void djui_panel_confirm_create(struct DjuiBase* caller, char* title, char* message, void (*on_yes_click)(struct DjuiBase*));
++// Same as djui_panel_confirm_create(), but the "no" button also runs a callback
++// instead of just closing the panel.
++void djui_panel_confirm_create_ex(struct DjuiBase* caller, char* title, char* message,
++                                  void (*on_yes_click)(struct DjuiBase*),
++                                  void (*on_no_click)(struct DjuiBase*));
+ 
+--- a/src/pc/djui/djui_panel_misc.c
++++ b/src/pc/djui/djui_panel_misc.c
+@@ -8,6 +8,9 @@
+ #include "pc/utils/misc.h"
+ #include "pc/configfile.h"
+ #include "game/hardcoded.h"
++#if defined(SM64COOPDX_CN_TEXT)
++#include "game/segment2.h"
++#endif
+ #if defined(_WIN32)
+ #include <windows.h>
+ #endif
+@@ -42,12 +45,25 @@
+ }
+ #endif
+ 
++#if defined(SM64COOPDX_CN_TEXT)
++// Runtime switch for the built-in iQue/Chinese text pack. Applies immediately:
++// chinese_text_pack_set_active() repoints the live dialog / course / act tables
++// and persists the choice.
++static void djui_panel_misc_chinese_text_changed(UNUSED struct DjuiBase* checkbox) {
++    chinese_text_pack_set_active(configChineseText);
++}
++#endif
++
+ void djui_panel_misc_create(struct DjuiBase* caller) {
+     struct DjuiThreePanel* panel = djui_panel_menu_create(DLANG(MISC, MISC_TITLE), false);
+     struct DjuiBase* body = djui_three_panel_get_body(panel);
+     {
+         djui_checkbox_create(body, DLANG(DISPLAY, SHOW_PING), &configShowPing, NULL);
+         djui_checkbox_create(body, DLANG(MISC, DISABLE_POPUPS), &configDisablePopups, NULL);
++#if defined(SM64COOPDX_CN_TEXT)
++        djui_checkbox_create(body, DLANG(MISC, CHINESE_TEXT_PACK), &configChineseText,
++                             djui_panel_misc_chinese_text_changed);
++#endif
+ #ifndef DEVELOPMENT
+         djui_checkbox_create(body, DLANG(MISC, LUA_PROFILER), &configLuaProfiler, NULL);
+ #endif
+--- a/src/pc/lua/utils/smlua_misc_utils.c
++++ b/src/pc/lua/utils/smlua_misc_utils.c
+@@ -8,6 +8,7 @@
+ #include "game/camera.h"
+ #include "game/hardcoded.h"
+ #include "game/hud.h"
++#include "game/cn_tex.h"
+ #include "menu/star_select.h"
+ #include "pc/lua/smlua.h"
+ #include "smlua_misc_utils.h"
+@@ -259,15 +260,21 @@
+ };
+ 
+ void hud_render_power_meter(s32 health, f32 x, f32 y, f32 width, f32 height) {
++    // This is not the vanilla display list: it rebuilds the widget out of three
++    // texture quads at fixed US offsets, so the iQue layout has to be applied
++    // by hand. Without it the pie sits four texels high in its socket and the
++    // dark socket shows through underneath (see cn_tex_gauge_dy()).
++    f32 gaugeY = y + height / 4 + cn_tex_gauge_dy() * (height / 64);
+     djui_hud_render_texture(&sPowerMeterTexturesInfo[0], x, y, width / 64, height / 64);
+     djui_hud_render_texture(&sPowerMeterTexturesInfo[1], x + (width - 2) / 2, y, width / 64, height / 64);
+     s32 numWedges = MIN(MAX(health >> 8, 0), 8);
+     if (numWedges != 0) {
+-        djui_hud_render_texture(&sPowerMeterTexturesInfo[numWedges + 1], x + (width - 4) / 4, y + height / 4, width / 64,  height / 64);
++        djui_hud_render_texture(&sPowerMeterTexturesInfo[numWedges + 1], x + (width - 4) / 4, gaugeY, width / 64,  height / 64);
+     }
+ }
+ 
+ void hud_render_power_meter_interpolated(s32 health, f32 prevX, f32 prevY, f32 prevWidth, f32 prevHeight, f32 x, f32 y, f32 width, f32 height) {
++    f32 gaugeDy = cn_tex_gauge_dy();
+     djui_hud_render_texture_interpolated(&sPowerMeterTexturesInfo[0],
+         prevX, prevY, prevWidth / 64, prevHeight / 64,
+         x,     y,     width     / 64, height     / 64);
+@@ -279,8 +286,8 @@
+     s32 numWedges = MIN(MAX(health >> 8, 0), 8);
+     if (numWedges != 0) {
+         djui_hud_render_texture_interpolated(&sPowerMeterTexturesInfo[numWedges + 1],
+-            prevX + (prevWidth - 4) / 4, prevY + prevHeight / 4, prevWidth / 64, prevHeight / 64,
+-            x     + (width - 4)     / 4, y     + height     / 4, width     / 64, height     / 64);
++            prevX + (prevWidth - 4) / 4, prevY + prevHeight / 4 + gaugeDy * (prevHeight / 64), prevWidth / 64, prevHeight / 64,
++            x     + (width - 4)     / 4, y     + height     / 4 + gaugeDy * (height     / 64), width     / 64, height     / 64);
+     }
+ }
+ 
+--- a/src/pc/lua/utils/smlua_text_utils.c
++++ b/src/pc/lua/utils/smlua_text_utils.c
+@@ -1,5 +1,7 @@
+ #include "sm64.h"
+ #include "types.h"
++#include <stdio.h>
++#include <stdlib.h>
+ #include "course_table.h"
+ #include "game/memory.h"
+ #include "game/ingame_menu.h"
+@@ -117,12 +119,52 @@
+     return true;
+ }
+ 
++// Statically-typed text tables (the vanilla ROM-backed buffers and the CN
++// iQue arrays) live in .rodata / .bss. The course/act name slots in
++// seg2_course_name_table[] can legitimately point at them (for example after
++// the Chinese text pack installs its arrays), so "pointer differs from the
++// original" no longer implies "this pointer came from malloc".
++//
++// Track the handful of strings this file actually allocates so we never hand a
++// static pointer to free(). Freeing a non-heap pointer aborts with
++// "free(): invalid size", which is otherwise very hard to trace back here.
++#define SMLUA_OWNED_TEXT_MAX 512
++static void *sSmluaOwnedText[SMLUA_OWNED_TEXT_MAX];
++static u32 sSmluaOwnedTextCount = 0;
++
++static void smlua_text_utils_register_owned(void *ptr) {
++    if (ptr == NULL) { return; }
++    if (sSmluaOwnedTextCount >= SMLUA_OWNED_TEXT_MAX) {
++        // Should never happen; leaking one string beats corrupting the heap.
++        LOG_LUA_WARNING("smlua text ownership table full, leaking pointer");
++        return;
++    }
++    sSmluaOwnedText[sSmluaOwnedTextCount++] = ptr;
++}
++
++static void smlua_text_utils_free_if_owned(void *ptr) {
++    u32 i;
++
++    if (ptr == NULL) { return; }
++
++    for (i = 0; i < sSmluaOwnedTextCount; i++) {
++        if (sSmluaOwnedText[i] == ptr) {
++            free(ptr);
++            sSmluaOwnedText[i] = sSmluaOwnedText[--sSmluaOwnedTextCount];
++            return;
++        }
++    }
++
++    // Not ours: a static vanilla / CN table pointer. Leave it alone; the
++    // caller restores the original pointer immediately after this returns.
++}
++
+ static void smlua_text_utils_reset_course_or_act_name(struct ReplacedName *name) {
+     if (name->name.get_table && name->orig.get_table) {
+         void **tblName = name->name.get_table() + name->name.offset;
+         void **tblOrig = name->orig.get_table() + name->orig.offset;
+         if (*tblName != *tblOrig) {
+-            free(*tblName);
++            smlua_text_utils_free_if_owned(*tblName);
+             *tblName = *tblOrig;
+         }
+     }
+@@ -136,9 +178,10 @@
+         void **tblName = name->name.get_table() + name->name.offset;
+         void **tblOrig = name->orig.get_table() + name->orig.offset;
+         if (*tblName != *tblOrig) {
+-            free(*tblName);
++            smlua_text_utils_free_if_owned(*tblName);
+         }
+         *tblName = smlua_text_utils_convert(replacement);
++        smlua_text_utils_register_owned(*tblName);
+     }
+     snprintf(name->name.value, sizeof(name->name.value), "%s", replacement);
+     name->modNum = modIndex + 1;
+@@ -163,6 +206,22 @@
+     } else {
+         dialog_table_shutdown();
+     }
++
++#if defined(SM64COOPDX_CN_TEXT)
++    // Resetting the course/act name slots writes the *vanilla* rom-backed
++    // pointers back into seg2_course_name_table[] / seg2_act_name_table[] --
++    // see smlua_text_utils_init_from_vanilla(), which snapshots
++    // tableOrigFunc() and assigns it into tableFunc(). That silently undoes
++    // apply_cn_text_pack().
++    //
++    // This is not only a shutdown-time problem: smlua_init() starts with
++    // smlua_shutdown(), and it is called again on every network join
++    // (network.c, packet_join.c) -- i.e. long after chinese_text_pack_init()
++    // ran during startup. Re-apply the pack here so the Chinese text survives
++    // any reset regardless of when it happens. apply_cn_text_pack() only
++    // rewrites the tables, so calling it when the pack is off is a no-op.
++    apply_cn_text_pack();
++#endif
+ }
+ 
+ struct DialogEntry* smlua_text_utils_dialog_get(enum DialogId dialogId) {
+--- a/src/pc/pc_main.c
++++ b/src/pc/pc_main.c
+@@ -42,6 +42,7 @@
+ #include "pc/djui/djui.h"
+ #include "pc/djui/djui_unicode.h"
+ #include "pc/djui/djui_panel.h"
++#include "pc/djui/djui_panel_confirm.h"
+ #include "pc/djui/djui_panel_modlist.h"
+ #include "pc/djui/djui_ctx_display.h"
+ #include "pc/djui/djui_fps_display.h"
+@@ -55,6 +56,7 @@
+ 
+ #include "gfx_dimensions.h"
+ #include "game/segment2.h"
++#include "game/cn_tex.h"
+ 
+ #include "engine/math_util.h"
+ 
+@@ -500,6 +502,71 @@
+     return NULL;
+ }
+ 
++#if defined(SM64COOPDX_CN_TEXT)
++// Called once the vanilla rom has been imported and DJUI is up. Asks the user
++// (only the first time) whether to use the bundled Simplified-Chinese text
++// pack, then wires the dialog / course / act tables to the matching set.
++// Both buttons must dismiss the panel themselves. Unlike the vanilla confirms
++// (quit / disconnect), these callbacks only rewrite config -- nothing in them
++// tears the panel down, so leaving the panel at the top of the stack made the
++// dialog look completely unresponsive: the answer was applied and saved, but
++// the box stayed on screen. The panel is pushed on top of the main menu
++// (djui_init_late() runs before us), so djui_panel_back() has a parent to
++// return to.
++static void chinese_text_pack_confirm_yes(UNUSED struct DjuiBase* caller) {
++    configChineseText = true;
++    configChineseTextPrompted = true;
++    gCnTextPackActive = 1;
++    apply_cn_text_pack();
++    // The ROM load already applied the overlay with the *old* config value, so
++    // re-apply it here; otherwise answering "no" leaves the iQue power meter /
++    // title wordmark / COURSE sign on screen with US text (and vice versa).
++    cn_tex_apply(true);
++    configfile_save(configfile_name());
++    djui_panel_back();
++}
++
++static void chinese_text_pack_confirm_no(UNUSED struct DjuiBase* caller) {
++    configChineseText = false;
++    configChineseTextPrompted = true;
++    gCnTextPackActive = 0;
++    apply_cn_text_pack();
++    cn_tex_apply(false);
++    configfile_save(configfile_name());
++    djui_panel_back();
++}
++
++static void chinese_text_pack_init(void) {
++    // Wire whichever set the saved config already selects. The "no" answer
++    // falls back to the vanilla rom-backed strings.
++    gCnTextPackActive = configChineseText ? 1 : 0;
++    apply_cn_text_pack();
++
++    if (configChineseTextPrompted) { return; }
++
++    // The pack data is compiled in from the iQue sources, so there is nothing
++    // to import here: just ask which set to use.
++    djui_panel_confirm_create_ex(NULL,
++        "\\#ffff00\\中文文本包",
++        "检测到已导入原版超级马力欧64 ROM。\n是否启用内置的神游（iQue）简体中文文本包？\n\n启用后游戏内对话框与选星界面将显示中文。",
++        chinese_text_pack_confirm_yes,
++        chinese_text_pack_confirm_no);
++}
++
++// Runtime toggle used by the MISC settings checkbox. Swaps the live dialog /
++// course / act tables and makes the choice persistent.
++void chinese_text_pack_set_active(bool active) {
++    configChineseText = active;
++    gCnTextPackActive = active ? 1 : 0;
++    apply_cn_text_pack();
++    // The pack also swaps a handful of textures (the power meter's 「力量」 and
++    // the title wordmark). Re-apply them so the change is visible without a
++    // restart -- cn_tex restores the saved US pixels when `active` is false.
++    cn_tex_apply(active);
++    configfile_save(configfile_name());
++}
++#endif
++
+ int main(int argc, char *argv[]) {
+     // handle terminal arguments
+     if (!parse_cli_opts(argc, argv)) { return 0; }
+@@ -577,6 +644,13 @@
+     djui_init_late();
+     djui_console_message_dequeue();
+ 
++#if defined(SM64COOPDX_CN_TEXT)
++    // A rom has been imported at this point; ask (once) whether the user wants
++    // the Simplified-Chinese (iQue) text pack, then point the dialog / course /
++    // act tables at the chosen set.
++    chinese_text_pack_init();
++#endif
++
+     show_update_popup();
+ 
+     if (can_update_game()) {
+--- a/src/pc/rom_assets.c
++++ b/src/pc/rom_assets.c
+@@ -4,6 +4,8 @@
+ #include "rom_checker.h"
+ #include "apparition.inc.c"
+ #include "utils/misc.h"
++#include "pc/configfile.h"
++#include "game/cn_tex.h"
+ 
+ #define ROM_ASSET_LOAD_DATA(bits) for (u##bits *data = asset->ptr; asset->cursor < asset->segmentedSize; data++) { *data = READ##bits(asset); }
+ 
+@@ -186,6 +188,19 @@
+     }
+ 
+     fclose(sRomFile);
++
++    // The texture arrays now hold the US rom's pixels. Let cn_tex save those
++    // originals and, if the pack is on, overlay iQue's localised versions.
++    //
++    // This belongs here rather than in the pack's own initialiser because it
++    // has to run exactly once per load, after the arrays are filled: hooking it
++    // to the load itself means it cannot race the loading thread, and the
++    // backup it takes is guaranteed to be the real US pixels rather than the
++    // zero-filled arrays that exist before the load.
++    //
++    // configChineseText is safe to read here: configfile_load() runs before the
++    // loading thread is started.
++    cn_tex_on_rom_loaded(configChineseText);
+ }
+ 
+ void rom_assets_queue(void* ptr, enum RomAssetType assetType, u32 physicalAddress, u32 physicalSize, u32 segmentedAddress, u32 segmentedSize) {
+--- a/text/define_courses.inc.c
++++ b/text/define_courses.inc.c
+@@ -1,3 +1,54 @@
++#if defined(SM64COOPDX_CN_TEXT)
++// Simplified-Chinese (iQue) course name data.
++#include "text/cn_courses_cn.inc.c"
++
++// COURSE_BOB etc. are *enum* constants, not preprocessor macros, so they can
++// never be pasted into an identifier with ##. These aliases map each course
++// enum token to the lower-case name used by the generated CN arrays.
++#define CN_CID_COURSE_BOB      course_bob
++#define CN_CID_COURSE_WF       course_wf
++#define CN_CID_COURSE_JRB      course_jrb
++#define CN_CID_COURSE_CCM      course_ccm
++#define CN_CID_COURSE_BBH      course_bbh
++#define CN_CID_COURSE_HMC      course_hmc
++#define CN_CID_COURSE_LLL      course_lll
++#define CN_CID_COURSE_SSL      course_ssl
++#define CN_CID_COURSE_DDD      course_ddd
++#define CN_CID_COURSE_SL       course_sl
++#define CN_CID_COURSE_WDW      course_wdw
++#define CN_CID_COURSE_TTM      course_ttm
++#define CN_CID_COURSE_THI      course_thi
++#define CN_CID_COURSE_TTC      course_ttc
++#define CN_CID_COURSE_RR       course_rr
++
++// Secret-star and castle-star slots occupy indices 15..25 of the same table.
++// Missing these was the pause-menu segfault: the slots fell through to the
++// vanilla {0xFF, 0x00...} ROM stubs, which the CN tokenizer mis-parses.
++#define CN_CID_COURSE_BITDW    course_bitdw
++#define CN_CID_COURSE_BITFS    course_bitfs
++#define CN_CID_COURSE_BITS     course_bits
++#define CN_CID_COURSE_PSS      course_pss
++#define CN_CID_COURSE_COTMC    course_cotmc
++#define CN_CID_COURSE_TOTWC    course_totwc
++#define CN_CID_COURSE_VCUTM    course_vcutm
++#define CN_CID_COURSE_WMOTR    course_wmotr
++#define CN_CID_COURSE_SA       course_sa
++#define CN_CID_COURSE_CAKE_END course_cake_end
++
++#define CN_COURSE_NAME__(id) (&cn_course_ ## id ## _0)
++#define CN_COURSE_NAME_(id)  CN_COURSE_NAME__(id)
++#define CN_COURSE_NAME(id)   CN_COURSE_NAME_(CN_CID_ ## id)
++#endif
++
++// Every table below re-defines the same three macros; undef them first so the
++// preprocessor does not warn about a non-identical redefinition.
++#undef COURSE_ACTS
++#undef SECRET_STAR
++#undef CASTLE_SECRET_STARS
++
++// Vanilla ROM-backed course-name buffers. The course source used here is
++// always the vanilla (numeric-size) one, even in CN builds, so [name] is the
++// correct bound.
+ #define COURSE_ACTS(id, name, a,b,c,d,e,f) \
+     static u8 GLUE2(COURSE_TABLE, _ ## id)[name] = { 0xFF };
+ 
+@@ -15,15 +66,66 @@
+ #undef SECRET_STAR
+ #undef CASTLE_SECRET_STARS
+ 
+-#define COURSE_ACTS(id, name, a,b,c,d,e,f) GLUE2(COURSE_TABLE, _ ## id),
+-#define SECRET_STAR(id, name) GLUE2(COURSE_TABLE, _ ## id),
+-#define CASTLE_SECRET_STARS(str) GLUE2(COURSE_TABLE, _castle_secret_stars),
++// Active table: CN data when the pack is on, vanilla ROM buffer when off.
++// Non-const so apply_cn_text_pack() can repoint each course slot.
++#if defined(SM64COOPDX_CN_TEXT)
++#define COURSE_ACTS(id, name, a,b,c,d,e,f) (u8 *)(void *)CN_COURSE_NAME(id),
++#else
++#define COURSE_ACTS(id, name, a,b,c,d,e,f) (u8 *)(void *)GLUE2(COURSE_TABLE, _ ## id),
++#endif
++#define SECRET_STAR(id, name) (u8 *)(void *)GLUE2(COURSE_TABLE, _ ## id),
++#define CASTLE_SECRET_STARS(str) (u8 *)(void *)GLUE2(COURSE_TABLE, _castle_secret_stars),
++
++u8* COURSE_TABLE[] = {
++#include "courses.h"
++    NULL
++};
++
++// Vanilla mirror: the "off" side of the switch (a no-op distinction in
++// non-CN builds, where it aliases the same buffers).
++#undef COURSE_ACTS
++#undef SECRET_STAR
++#undef CASTLE_SECRET_STARS
++const u8 *const cn_course_name_vanilla[] = {
++#define COURSE_ACTS(id, name, a,b,c,d,e,f) \
++    (const u8 *)(void *)GLUE2(COURSE_TABLE, _ ## id),
++#define SECRET_STAR(id, name) \
++    (const u8 *)(void *)GLUE2(COURSE_TABLE, _ ## id),
++#define CASTLE_SECRET_STARS(str) \
++    (const u8 *)(void *)GLUE2(COURSE_TABLE, _castle_secret_stars),
+ 
+-const u8* COURSE_TABLE[] = {
+ #include "courses.h"
+     NULL
+ };
+ 
++#undef COURSE_ACTS
++#undef SECRET_STAR
++#undef CASTLE_SECRET_STARS
++
++#if defined(SM64COOPDX_CN_TEXT)
++// CN mirror: the "on" side of the switch.
++#undef COURSE_ACTS
++#undef SECRET_STAR
++#undef CASTLE_SECRET_STARS
++const u8 *const cn_course_name_cn[] = {
++#define COURSE_ACTS(id, name, a,b,c,d,e,f) (const u8 *)CN_COURSE_NAME(id),
++#define SECRET_STAR(id, name) (const u8 *)CN_COURSE_NAME(id),
++#define CASTLE_SECRET_STARS(str) (const u8 *)(&cn_course_course_castle_secret_stars),
++
++#include "courses.h"
++    NULL
++};
++
++#undef COURSE_ACTS
++#undef SECRET_STAR
++#undef CASTLE_SECRET_STARS
++#endif
++
++// "original" table keeps unmodified vanilla names for Lua / restore paths.
++#define COURSE_ACTS(id, name, a,b,c,d,e,f) GLUE2(COURSE_TABLE, _ ## id),
++#define SECRET_STAR(id, name) GLUE2(COURSE_TABLE, _ ## id),
++#define CASTLE_SECRET_STARS(str) GLUE2(COURSE_TABLE, _castle_secret_stars),
++
+ const u8* GLUE2(COURSE_TABLE, _original)[] = {
+ #include "courses.h"
+     NULL
+--- a/text/define_text.inc.c
++++ b/text/define_text.inc.c
+@@ -1,20 +1,70 @@
+ // == dialog ==
+ // (defines en_dialog_table etc.)
+ 
++#if defined(SM64COOPDX_CN_TEXT)
++// Simplified-Chinese (iQue) text pack: real two-byte CN glyph data.
++// Generated from the official n64decomp/sm64 text/cn sources.
++//
++// Keeping the name dialog_text_<id> for the ROM-backed vanilla buffer lets
++// dialog_assets.inc.c load into it unchanged; the CN arrays get their own
++// cn_dialog_<id> names and apply_cn_text_pack() picks which one is live.
++#include "text/cn_dialogs_cn.inc.c"
++
++// Vanilla ROM-backed text buffers (filled by dialog_assets.inc.c below).
++#define DEFINE_DIALOG(id, _1, _2, _3, _4, _len) \
++    static u8 dialog_text_ ## id[_len] = { 0xFF };
++#else
+ #define DEFINE_DIALOG(id, _1, _2, _3, _4, _len) \
+     static u8 dialog_text_ ## id[_len] = { 0xFF };
++#endif
++
++#include "dialogs.h"
++
++#undef DEFINE_DIALOG
+ 
++#if defined(SM64COOPDX_CN_TEXT)
++// Registry of every CN dialog buffer, so cn_is_cn_string() can tell "this
++// pointer is CN text" without having to reach into the dialog entries (which
++// change at runtime via apply_cn_text_pack and Lua overrides).
++const u8 *const cn_dialog_registry[] = {
++#define DEFINE_DIALOG(id, _1, _2, _3, _4, _5) cn_dialog_ ## id,
+ #include "dialogs.h"
++    NULL
++};
++#endif
+ 
+ #undef DEFINE_DIALOG
++
++#if defined(SM64COOPDX_CN_TEXT)
++// Non-const so apply_cn_text_pack() can repoint .str at runtime
++// (DialogEntry.str is already a mutable pointer to const data) and switch
++// .linesPerBox between the vanilla and iQue page heights.
++//
++// The initial value stays the vanilla number and apply_cn_text_pack() corrects
++// it, because where the two disagree (DIALOG_005 3->4, DIALOG_117 1->2) the
++// whole box depends on it: the height scale, the page-break line and the
++// scissor window are all derived from dialog->linesPerBox. Keeping the US value
++// drew a box one line too short, so the last line of text hung out of it.
++#define DEFINE_DIALOG(id, unused, linesPerBox, leftOffset, width, _) \
++    static struct DialogEntry dialog_entry_orig_ ## id = { \
++        unused, linesPerBox, leftOffset, width, cn_dialog_ ## id, NULL, false \
++    };
++#else
+ #define DEFINE_DIALOG(id, unused, linesPerBox, leftOffset, width, _) \
+     static const struct DialogEntry dialog_entry_orig_ ## id = { \
+         unused, linesPerBox, leftOffset, width, dialog_text_ ## id, NULL, false \
+     };
++#endif
+ 
+ #include "dialogs.h"
+ 
+ #undef DEFINE_DIALOG
++
++#if defined(SM64COOPDX_CN_TEXT)
++// Non-zero while the Chinese (iQue) pack supplies the dialog / course / act
++// text. Set from configChineseText before the tables are first used.
++u8 gCnTextPackActive = 1;
++#endif
+ #define DEFINE_DIALOG(id, _1, _2, _3, _4, _5) &dialog_entry_orig_ ## id,
+ 
+ const struct DialogEntry *const seg2_dialog_original[] = {
+@@ -35,6 +85,19 @@
+ // == acts ==
+ // (defines en_act_name_table etc.)
+ 
++#if defined(SM64COOPDX_CN_TEXT)
++// CN mode emits ROM-backed vanilla buffers alongside the CN data so
++// apply_cn_text_pack() can switch the act-name table at runtime. The macro
++// args are strings in the CN course source, so the CN path must not use them
++// as array bounds.
++#define COURSE_ACTS(id, name, a,b,c,d,e,f) \
++    static u8 act_name_ ## id ## _1[a] = { 0xFF }; \
++    static u8 act_name_ ## id ## _2[b] = { 0xFF }; \
++    static u8 act_name_ ## id ## _3[c] = { 0xFF }; \
++    static u8 act_name_ ## id ## _4[d] = { 0xFF }; \
++    static u8 act_name_ ## id ## _5[e] = { 0xFF }; \
++    static u8 act_name_ ## id ## _6[f] = { 0xFF };
++#else
+ #define COURSE_ACTS(id, name, a,b,c,d,e,f) \
+     static u8 act_name_ ## id ## _1[a] = { 0xFF }; \
+     static u8 act_name_ ## id ## _2[b] = { 0xFF }; \
+@@ -42,6 +105,7 @@
+     static u8 act_name_ ## id ## _4[d] = { 0xFF }; \
+     static u8 act_name_ ## id ## _5[e] = { 0xFF }; \
+     static u8 act_name_ ## id ## _6[f] = { 0xFF };
++#endif
+ 
+ #define SECRET_STAR(id, name)
+ #define CASTLE_SECRET_STARS(str)
+@@ -55,20 +119,172 @@
+ #undef COURSE_ACTS
+ #undef EXTRA_TEXT
+ 
++#if defined(SM64COOPDX_CN_TEXT)
++// COURSE_BOB etc. are enum constants (not macros), so they cannot be pasted
++// with ##. CN_CID_<token> (defined in define_courses.inc.c) expands to the
++// lower-case name used by the generated CN arrays. Three macro levels are
++// needed because the middle one is only reached as a ## operand.
++#define CN_ACT_PTR__(id, i) ((u8 *)(void *)&cn_course_ ## id ## _ ## i)
++#define CN_ACT_PTR_(id, i)  CN_ACT_PTR__(id, i)
++#define CN_ACT_PTR(id, i)   CN_ACT_PTR_(CN_CID_ ## id, i)
+ #define COURSE_ACTS(id, name, a,b,c,d,e,f) \
+-    act_name_ ## id ## _1, act_name_ ## id ## _2, act_name_ ## id ## _3, \
+-    act_name_ ## id ## _4, act_name_ ## id ## _5, act_name_ ## id ## _6,
++    CN_ACT_PTR(id, 1), CN_ACT_PTR(id, 2), CN_ACT_PTR(id, 3), \
++    CN_ACT_PTR(id, 4), CN_ACT_PTR(id, 5), CN_ACT_PTR(id, 6),
++#else
++#define COURSE_ACTS(id, name, a,b,c,d,e,f) \
++    (u8 *)(void *)act_name_ ## id ## _1, (u8 *)(void *)act_name_ ## id ## _2, (u8 *)(void *)act_name_ ## id ## _3, \
++    (u8 *)(void *)act_name_ ## id ## _4, (u8 *)(void *)act_name_ ## id ## _5, (u8 *)(void *)act_name_ ## id ## _6,
++#endif
++#define EXTRA_TEXT(id, str) (u8 *)(void *)extra_text_ ## id,
++
++// Active table. Non-const so apply_cn_text_pack() can swap each slot between
++// the CN array and the vanilla ROM-backed buffer.
++u8* seg2_act_name_table[] = {
++#include "courses.h"
++    NULL
++};
++
++// Vanilla (ROM-backed) mirror: always the "off" side of the switch. In
++// non-CN builds this is identical to seg2_act_name_table.
++//
++// The macro redefinition below is load-bearing, not redundant with the #else
++// branch above. Both this table and seg2_act_name_table[] expand the *same*
++// courses.h, and the active table's COURSE_ACTS (line 123) resolves to the CN
++// pointers in a CN build. Without an explicit #undef + redefinition here, this
++// "vanilla" mirror would silently be built from the CN pointers too, making
++// both sides of the runtime switch identical: apply_cn_text_pack() would
++// install CN act names whether the pack is on or off, and -- because
++// cn_is_cn_string() only trusts these pointers while gCnTextPackActive is set
++// -- the same bytes would then be walked as vanilla single-byte text with the
++// switch off, stopping at the first 0xFF.
++#undef COURSE_ACTS
++#undef EXTRA_TEXT
++#define COURSE_ACTS(id, name, a,b,c,d,e,f) \
++    (u8 *)(void *)act_name_ ## id ## _1, (u8 *)(void *)act_name_ ## id ## _2, (u8 *)(void *)act_name_ ## id ## _3, \
++    (u8 *)(void *)act_name_ ## id ## _4, (u8 *)(void *)act_name_ ## id ## _5, (u8 *)(void *)act_name_ ## id ## _6,
++#define EXTRA_TEXT(id, str) (const u8 *)(void *)extra_text_ ## id,
++
++const u8 *const cn_act_name_vanilla[] = {
++#include "courses.h"
++    NULL
++};
++
++#if defined(SM64COOPDX_CN_TEXT)
++// CN mirror: the "on" side of the switch.
++#undef COURSE_ACTS
++#undef EXTRA_TEXT
++const u8 *const cn_act_name_cn[] = {
++#define COURSE_ACTS(id, name, a,b,c,d,e,f) \
++    CN_ACT_PTR(id, 1), CN_ACT_PTR(id, 2), CN_ACT_PTR(id, 3), \
++    CN_ACT_PTR(id, 4), CN_ACT_PTR(id, 5), CN_ACT_PTR(id, 6),
+ #define EXTRA_TEXT(id, str) extra_text_ ## id,
+ 
+-const u8* seg2_act_name_table[] = {
+ #include "courses.h"
+     NULL
+ };
+ 
++#undef COURSE_ACTS
++#undef EXTRA_TEXT
++#endif
++
++// The "original" table keeps the vanilla pointers in every build so Lua and
++// the dialog restore path always see unmodified text.
++#define COURSE_ACTS(id, name, a,b,c,d,e,f) \
++    act_name_ ## id ## _1, act_name_ ## id ## _2, act_name_ ## id ## _3, \
++    act_name_ ## id ## _4, act_name_ ## id ## _5, act_name_ ## id ## _6,
++#define EXTRA_TEXT(id, str) extra_text_ ## id,
++
+ const u8* seg2_act_name_table_original[] = {
+ #include "courses.h"
+     NULL
+ };
+ 
++#undef COURSE_ACTS
++#undef EXTRA_TEXT
++
++// Vanilla / CN text is compiled in for both packs; the ROM loads below only
++// fill the vanilla buffers, so they must always be emitted in CN builds too.
++// act_name_<id>_N and the sized course-name placeholders exist in both modes.
+ #include "dialog_assets.inc.c"
+ #include "courses_assets.inc.c"
++
++#if defined(SM64COOPDX_CN_TEXT)
++// Repoint the active dialog entries and course/act name slots at the pack
++// selected by gCnTextPackActive. Safe to call repeatedly.
++//
++// IMPORTANT invariant for seg2_course_name_table[] / seg2_act_name_table[]:
++// the pointers installed here are *static* arrays (.rodata / .data), NOT heap
++// allocations. The Lua text layer (smlua_text_utils.c) frees a table slot when
++// it differs from the original before replacing it, so it must only free
++// pointers it allocated itself. It keeps an explicit ownership set for exactly
++// this reason: free() on one of these static pointers aborts immediately with
++// "free(): invalid size", which is what happened whenever a mod was activated
++// (hosting or joining a room calls smlua_init() -> smlua_text_utils_reset_all()).
++// If you ever make these pointers heap-allocated, update that ownership set too.
++void apply_cn_text_pack(void) {
++    // dialogs: text pointer AND page height. Both have to follow the same
++    // switch -- a CN string paginated with the US line count overflows the box.
++// NOTE: the third macro parameter must NOT be named `linesPerBox`. The body
++// below also reads *and* writes the struct field of that name, and the C
++// preprocessor replaces every occurrence of a parameter name in the macro body
++// -- `.linesPerBox` would be rewritten to `.4` (the argument) and the file
++// would fail to compile. Hence `_lines`.
++#define DEFINE_DIALOG(id, _1, _lines, _3, _4, _5) \
++    dialog_entry_orig_ ## id.str = gCnTextPackActive ? cn_dialog_ ## id : dialog_text_ ## id; \
++    dialog_entry_orig_ ## id.linesPerBox = gCnTextPackActive ? cn_dialog_lines_ ## id : (_lines);
++
++#include "dialogs.h"
++
++#undef DEFINE_DIALOG
++
++    // course + act name tables
++    {
++        extern u8 *seg2_course_name_table[];
++        extern u8 *seg2_act_name_table[];
++        extern const u8 *const cn_course_name_vanilla[];
++        extern const u8 *const cn_act_name_vanilla[];
++        extern const u8 *const cn_course_name_cn[];
++        extern const u8 *const cn_act_name_cn[];
++        u32 i;
++
++        // Hard upper bounds: die loudly instead of walking off the end of the
++        // live table if a NULL sentinel is ever missing. A missing sentinel
++        // here silently writes pointers over adjacent .data and shows up much
++        // later as "free(): invalid size", which is very hard to trace back.
++        #define CN_COURSE_SLOTS 26
++        #define CN_ACT_SLOTS    200
++
++        for (i = 0; i < CN_COURSE_SLOTS && cn_course_name_vanilla[i] != NULL; i++) {
++            seg2_course_name_table[i] = (u8 *)cn_course_name_vanilla[i];
++        }
++        for (i = 0; i < CN_ACT_SLOTS && cn_act_name_vanilla[i] != NULL; i++) {
++            seg2_act_name_table[i] = (u8 *)cn_act_name_vanilla[i];
++        }
++
++        if (gCnTextPackActive) {
++            // overlay the CN pointers on top of the vanilla defaults
++            for (i = 0; i < CN_COURSE_SLOTS && cn_course_name_cn[i] != NULL; i++) {
++                seg2_course_name_table[i] = (u8 *)cn_course_name_cn[i];
++            }
++            for (i = 0; i < CN_ACT_SLOTS && cn_act_name_cn[i] != NULL; i++) {
++                seg2_act_name_table[i] = (u8 *)cn_act_name_cn[i];
++            }
++        }
++
++        #undef CN_COURSE_SLOTS
++        #undef CN_ACT_SLOTS
++    }
++
++    // The dialog entries the renderer actually uses live in a heap copy made by
++    // dialog_table_init(), which ran before this function ever did -- so those
++    // copies still carry the static initialiser's US linesPerBox. Push the
++    // freshly switched values (str *and* page height) into them, otherwise the
++    // CN text is paginated with the US line count and overflows the box.
++    // Declared here rather than included: this file is textconv'd and included
++    // from segment2.c, which has no reason to pull in the PC dialog table.
++    {
++        extern void dialog_table_sync_vanilla(void);
++        dialog_table_sync_vanilla();
++    }
++}
++#endif

@@ -1,0 +1,188 @@
+#pragma once
+
+#include "game/cn_font.h"
+
+// Declares `_var` as a `const u8 *` that points at the CN translation when the
+// text pack is active, and at a private stack copy of the vanilla ROM string
+// otherwise.
+//
+// The old form of this macro allocated a fixed-size array and memcpy'd into it:
+//     u8 _var[TEXT_STAR_LENGTH]; memcpy(_var, gTEXT_STAR, TEXT_STAR_LENGTH);
+// That cannot work for CN text, because a two-byte-per-character encoding has
+// no fixed relationship to the vanilla single-byte length -- "STAR" is 2 bytes
+// of vanilla but "星星" is 6 bytes of CN. Copying into the vanilla-sized array
+// would overflow it. Pointing at the shared read-only CN array sidesteps the
+// length problem entirely; the stack copy only has to be big enough for the
+// vanilla string, which is what TEXT_*_LENGTH already describes.
+//
+// `_id` is a CNLabelId from cn_font.h. Every vanilla render entry point takes
+// `const u8 *`, so the call sites need no changes beyond naming the label.
+#define INGAME_TEXT_COPY(_var, _text, _id) \
+    u8 _var ## _vanilla[_text ## _LENGTH]; \
+    memcpy(_var ## _vanilla, g ## _text, _text ## _LENGTH); \
+    const u8 *_var = cn_label_get(_id) ? cn_label_get(_id) \
+                                       : (const u8 *)_var ## _vanilla
+
+#define INGAME_TEXT_PTR(_text) g ## _text
+
+// Mutable variant, for the call sites that overwrite the buffer after copying
+// (star_select's per-star number, file_select's save-slot letter and the
+// "MARIO A JUST ERASED" slot digit). Those all take CN_LABEL_NONE -- they hold
+// a digit or a letter, not translatable text -- but they must stay writable, so
+// they cannot use the const pointer form above.
+#define INGAME_TEXT_COPY_MUTABLE(_var, _text) \
+    u8 _var[_text ## _LENGTH]; \
+    memcpy(_var, g ## _text, _text ## _LENGTH)
+
+// Same, for a label the current build never draws (textCatch is US-unused).
+// __attribute__((unused)) has to sit on the pointer declaration itself, because
+// the macro now expands to a statement sequence rather than one declaration --
+// so the old "UNUSED u8 x[] = {...}" prefix no longer reaches it.
+#define INGAME_TEXT_COPY_UNUSED(_var, _text, _id) \
+    u8 _var ## _vanilla[_text ## _LENGTH]; \
+    memcpy(_var ## _vanilla, g ## _text, _text ## _LENGTH); \
+    const u8 *_var __attribute__((unused)) = \
+        cn_label_get(_id) ? cn_label_get(_id) : (const u8 *)_var ## _vanilla
+
+#define TEXT_ZERO_LENGTH 2
+#define TEXT_COIN_LENGTH 2
+#define TEXT_STAR_LENGTH 2
+#define TEXT_COIN_X_LENGTH 3
+#define TEXT_STAR_X_LENGTH 3
+#define TEXT_VARIABLE_X_LENGTH 2
+#define TEXT_UNFILLED_STAR_LENGTH 2
+#define TEXT_NEW_LENGTH 4
+#define TEXT_4DASHES_LENGTH 5
+#define TEXT_PAUSE_LENGTH 6
+#define TEXT_HUD_CONGRATULATIONS_LENGTH 16
+#define TEXT_MARIO_LENGTH 6
+#define TEXT_SELECT_FILE_LENGTH 12
+#define TEXT_CHECK_FILE_LENGTH 11
+#define TEXT_COPY_FILE_LENGTH 10
+#define TEXT_ERASE_FILE_LENGTH 11
+#define TEXT_SOUND_SELECT_LENGTH 13
+#define TEXT_FILE_MARIO_A_LENGTH 8
+#define TEXT_FILE_MARIO_B_LENGTH 8
+#define TEXT_FILE_MARIO_C_LENGTH 8
+#define TEXT_FILE_MARIO_D_LENGTH 8
+#define TEXT_SCORE_LENGTH 6
+#define TEXT_COPY_LENGTH 5
+#define TEXT_ERASE_LENGTH 6
+#define TEXT_STEREO_LENGTH 7
+#define TEXT_MONO_LENGTH 5
+#define TEXT_HEADSET_LENGTH 8
+#define TEXT_SAVED_DATA_EXISTS_LENGTH 17
+#define TEXT_NO_SAVED_DATA_EXISTS_LENGTH 21
+#define TEXT_RETURN_LENGTH 7
+#define TEXT_CHECK_SCORE_LENGTH 12
+#define TEXT_COPY_FILE_BUTTON_LENGTH 10
+#define TEXT_ERASE_FILE_BUTTON_LENGTH 11
+#define TEXT_HI_SCORE_LENGTH 9
+#define TEXT_MY_SCORE_LENGTH 9
+#define TEXT_SCORE_MARIO_A_LENGTH 4
+#define TEXT_SCORE_MARIO_B_LENGTH 4
+#define TEXT_SCORE_MARIO_C_LENGTH 4
+#define TEXT_SCORE_MARIO_D_LENGTH 4
+#define TEXT_COPY_IT_TO_WHERE_LENGTH 18
+#define TEXT_COPYING_COMPLETED_LENGTH 18
+#define TEXT_NO_FILE_TO_COPY_FROM_LENGTH 14
+#define TEXT_SURE_LENGTH 6
+#define TEXT_YES_LENGTH 4
+#define TEXT_NO_LENGTH 3
+#define TEXT_FILE_MARIO_A_JUST_ERASED_LENGTH 20
+#define TEXT_COURSE_LENGTH 7
+#define TEXT_MYSCORE_LENGTH 8
+#define TEXT_CONTINUE_LENGTH 9
+#define TEXT_EXIT_COURSE_LENGTH 12
+#define TEXT_EXIT_GAME 0xe,0x21,0x12,0x1d,0x9e,0x10,0xa,0x16,0xe,0xff
+#define TEXT_CAMERA_ANGLE_R_LENGTH 24
+#define TEXT_LAKITU_MARIO_LENGTH 15
+#define TEXT_LAKITU_STOP_LENGTH 14
+#define TEXT_NORMAL_UPCLOSE_LENGTH 19
+#define TEXT_NORMAL_FIXED_LENGTH 16
+#define TEXT_CATCH_LENGTH 6
+#define TEXT_CLEAR_LENGTH 6
+#define TEXT_HUD_HI_SCORE_LENGTH 9
+#define TEXT_SAVE_AND_CONTINUE_LENGTH 16
+#define TEXT_SAVE_AND_QUIT_LENGTH 12
+#define TEXT_SAVE_EXIT_GAME 0x1c,0xa,0x1f,0xe,0x9e,0xe5,0x9e,0xe,0x21,0x12,0x1d,0x9e,0x10,0xa,0x16,0xe,0xff
+#define TEXT_CONTINUE_WITHOUT_SAVING_LENGTH 21
+#define TEXT_FILE_MARIO_EXCLAMATION_LENGTH 7
+#define TEXT_POWER_STARS_RESTORED_LENGTH 52
+#define TEXT_THANKS_TO_YOU_LENGTH 31
+#define TEXT_THANK_YOU_MARIO_LENGTH 18
+#define TEXT_SOMETHING_SPECIAL_LENGTH 43
+#define TEXT_LISTEN_EVERYBODY_LENGTH 19
+#define TEXT_LETS_HAVE_CAKE_LENGTH 31
+#define TEXT_FOR_MARIO_LENGTH 16
+#define TEXT_FILE_MARIO_QUESTION_LENGTH 7
+extern u8 gTEXT_ZERO[];
+extern u8 gTEXT_COIN[];
+extern u8 gTEXT_STAR[];
+extern u8 gTEXT_COIN_X[];
+extern u8 gTEXT_STAR_X[];
+extern u8 gTEXT_VARIABLE_X[];
+extern u8 gTEXT_UNFILLED_STAR[];
+extern u8 gTEXT_NEW[];
+extern u8 gTEXT_4DASHES[];
+extern u8 gTEXT_PAUSE[];
+extern u8 gTEXT_HUD_CONGRATULATIONS[];
+extern u8 gTEXT_MARIO[];
+extern u8 gTEXT_SELECT_FILE[];
+extern u8 gTEXT_CHECK_FILE[];
+extern u8 gTEXT_COPY_FILE[];
+extern u8 gTEXT_ERASE_FILE[];
+extern u8 gTEXT_SOUND_SELECT[];
+extern u8 gTEXT_FILE_MARIO_A[];
+extern u8 gTEXT_FILE_MARIO_B[];
+extern u8 gTEXT_FILE_MARIO_C[];
+extern u8 gTEXT_FILE_MARIO_D[];
+extern u8 gTEXT_SCORE[];
+extern u8 gTEXT_COPY[];
+extern u8 gTEXT_ERASE[];
+extern u8 gTEXT_STEREO[];
+extern u8 gTEXT_MONO[];
+extern u8 gTEXT_HEADSET[];
+extern u8 gTEXT_SAVED_DATA_EXISTS[];
+extern u8 gTEXT_NO_SAVED_DATA_EXISTS[];
+extern u8 gTEXT_RETURN[];
+extern u8 gTEXT_CHECK_SCORE[];
+extern u8 gTEXT_COPY_FILE_BUTTON[];
+extern u8 gTEXT_ERASE_FILE_BUTTON[];
+extern u8 gTEXT_HI_SCORE[];
+extern u8 gTEXT_MY_SCORE[];
+extern u8 gTEXT_SCORE_MARIO_A[];
+extern u8 gTEXT_SCORE_MARIO_B[];
+extern u8 gTEXT_SCORE_MARIO_C[];
+extern u8 gTEXT_SCORE_MARIO_D[];
+extern u8 gTEXT_COPY_IT_TO_WHERE[];
+extern u8 gTEXT_COPYING_COMPLETED[];
+extern u8 gTEXT_NO_FILE_TO_COPY_FROM[];
+extern u8 gTEXT_SURE[];
+extern u8 gTEXT_YES[];
+extern u8 gTEXT_NO[];
+extern u8 gTEXT_FILE_MARIO_A_JUST_ERASED[];
+extern u8 gTEXT_COURSE[];
+extern u8 gTEXT_MYSCORE[];
+extern u8 gTEXT_CONTINUE[];
+extern u8 gTEXT_EXIT_COURSE[];
+extern u8 gTEXT_CAMERA_ANGLE_R[];
+extern u8 gTEXT_LAKITU_MARIO[];
+extern u8 gTEXT_LAKITU_STOP[];
+extern u8 gTEXT_NORMAL_UPCLOSE[];
+extern u8 gTEXT_NORMAL_FIXED[];
+extern u8 gTEXT_CATCH[];
+extern u8 gTEXT_CLEAR[];
+extern u8 gTEXT_HUD_HI_SCORE[];
+extern u8 gTEXT_SAVE_AND_CONTINUE[];
+extern u8 gTEXT_SAVE_AND_QUIT[];
+extern u8 gTEXT_CONTINUE_WITHOUT_SAVING[];
+extern u8 gTEXT_FILE_MARIO_EXCLAMATION[];
+extern u8 gTEXT_POWER_STARS_RESTORED[];
+extern u8 gTEXT_THANKS_TO_YOU[];
+extern u8 gTEXT_THANK_YOU_MARIO[];
+extern u8 gTEXT_SOMETHING_SPECIAL[];
+extern u8 gTEXT_LISTEN_EVERYBODY[];
+extern u8 gTEXT_LETS_HAVE_CAKE[];
+extern u8 gTEXT_FOR_MARIO[];
+extern u8 gTEXT_FILE_MARIO_QUESTION[];

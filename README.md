@@ -3,7 +3,7 @@
 **一张图片**
 
 ## 使用
-你必须先拥有一个合法的《神游马力欧64》的 z64 decomp 副本，本仓库不包含 Rom。  
+你必须拥有一个合法的《神游马力欧64》的 z64 decomp 副本，本仓库不包含 Rom。  
 Super Mario 64 (Ch) (iQue) \[\!\]：`29047fba820695bd14c5bd7aa1aa4400`  
 确认无误后将 ROM 放置在已经应用了 Ique Deluxe 的 sm64coopdx 程序根目录（或者放置在 User 目录也可）  
 如果操作无误，那么神游汉化资源功能将自动打开
@@ -25,7 +25,7 @@ sh ./install.sh             # For Linux/MacOS
 ```
 
 这会先打开一个交互式的 TUI 界面询问构建产物需要：
- 1. 上游版本：`deluxe-team/sm64coopdx` 或者 `Shangshanruo66958/sm64coopdx-Chinese`
+ 1. 上游版本：`coop-deluxe/sm64coopdx` 或者 `Shangshanruo66958/sm64coopdx-Chinese`
  2. 是否应用 UIPatch 补丁，一般情况下不应用 UIPatch 补丁时只能通过修改配置文件修改，应用后可以在 设置 -> 其他 -> 神游汉化 中进行便捷修改
  3. 是否应用 djui_modern 补丁，这是由上善若制作的现代化 Djoslin's UI 模块，详细可查看 [This](https://github.com/Shangshanruo666/djui_modern)，应用后本补丁也会根据其补丁做兼容
 
@@ -34,6 +34,7 @@ sh ./install.sh             # For Linux/MacOS
  2. 询问是否需要生成安装包，勾选后会根据平台生成对应的软件包
    - Debian 系 Linux 将生成 sm64coopdx-iquedx_x.x.x_x86_64.deb 的软件包并使用 apt 安装
    - Arch 系 Linux 将通过 `makepkg -si` 生成 sm64coopdx-iquedx_x.x.x_x86_64.tar.xv 的软件包并使用 pacman 安装
+     - 本来想提交到 AUR 的然后最近好像不给注册开放没办法了，目前还不能 `yay -S sm64coopdx-iquedx`
    - 其他 Linux 发行版将自动把构建产物放在 `/opt/sm64coopdx-iquedx` 下，上述所有软件包应用本体也是在这个路径
 
 你也可以将仓库 fork 后使用 Github Action 自己编译
@@ -43,9 +44,9 @@ sh ./install.sh             # For Linux/MacOS
 
 本仓库只存「改动」不存上游全量源码：
 
-- `src/` —— 被改过的文件，**完整副本，路径与上游逐级一致**（唯一编辑源）
-- `patches/` —— 由 `src/` 对基线 diff 出来的补丁，按序应用，不手写
-- `modules/` —— 可独立开关的模块（新增文件 / 额外钩子）
+- `src/` —— 被改过的文件，**路径与上游逐级一致**（唯一编辑源）
+- `patches/` —— 由 `src/` 对基线 diff 出来的补丁
+- `modules/cn-text/` —— 神游汉化核心模块：字形表、文本包、贴图覆盖
 - `scripts/gen_patches.sh` —— 从 `src/` 生成补丁
 - `upstream.txt` —— 补丁基线（上游仓库 + commit）
 

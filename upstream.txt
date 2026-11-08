@@ -1,10 +1,10 @@
-# 补丁基线（唯一权威来源）
-#
-# 所有 patches/ 与 modules/**/patch.patch 都必须能在下列基线上干净应用。
-# 升级基线 = 一次单独的 commit，只改这个文件 + 重新生成全部补丁。
+# 补丁基线
+# Upstream Patcher Commit
 
-repo   = https://github.com/deluxe-team/sm64coopdx
-commit =
-# 备选基线（汉化整合版，模块需同时兼容两套）
-alt-repo   = https://github.com/Shangshanruo66958/sm64coopdx-Chinese
-alt-commit =
+# 原版 CoopDX / Super Mario 64 Co-op Deluxe        - main v1.5.2
+repo   = https://github.com/coop-deluxe/sm64coopdx
+commit = 8cd6e5977d9f920d51ca71f2c61801d019ed79c6
+
+# 上善若&梅塔的长名字的汉化 / 神游马力欧64CoopDX   - Substition 汉化 1.0.1 (v1.5.2)
+cn-repo   = https://github.com/Shangshanruo66958/sm64coopdx-Chinese
+cn-commit =
