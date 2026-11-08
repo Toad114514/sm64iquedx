@@ -1,23 +1,43 @@
 # 仓库布局
 
-本仓库只存放「补丁 + 模块」，不存放上游 sm64coopdx 源码、也不存放任何 ROM。
-构建时由 `install.sh` 克隆上游源码，再把这里的模块叠加进去。
+本仓库只存放「源码改动 + 补丁 + 模块」，不存放上游 sm64coopdx 全量源码、也不存放任何 ROM。
+构建时由 `install.sh` 克隆上游源码，再把这里的改动叠加进去。
 
 ```
-patches/    按序应用的全量补丁（0001-*.patch …），顺序即依赖顺序
-modules/    可独立开关的功能模块，一个目录一个模块
-scripts/    构建 / 应用补丁的辅助脚本
-docs/       设计说明
+src/         被修改过的文件，完整副本，路径与上游**逐级一致**（唯一编辑源）
+patches/     由 src/ 对基线 diff 出来的补丁，供 install.sh 按序应用
+modules/     可独立开关的功能模块，一个目录一个模块
+scripts/     构建 / 生成补丁 / 应用补丁的辅助脚本
+docs/        设计说明
 upstream.txt 补丁基于的上游仓库与 commit（唯一权威基线）
 ```
 
+## src/
+
+镜像上游目录结构，只放**被改过的文件**，没动过的文件不要放。
+
+```
+sm64iquedx/src/src/game/print.c          ← 对应上游 src/game/print.c
+sm64iquedx/src/src/menu/intro_geo.c      ← 对应上游 src/menu/intro_geo.c
+sm64iquedx/src/lang/Chinese.ini          ← 对应上游 lang/Chinese.ini
+sm64iquedx/src/Makefile                  ← 对应上游根目录 Makefile
+```
+
+规则：
+
+1. **路径即目标路径**。`src/` 下的相对路径直接拼到上游根目录，不加任何中间层。
+2. **整文件保存**。存的是改完之后的完整文件，不是片段；因此在编辑器里打开就能读、能编译。
+3. **只放改过的**。判断标准是「与基线上游逐字节相同否」，相同的一律不入库。
+4. **这里是唯一编辑源**。改代码先改 `src/`，`patches/` 由脚本生成，不要手改补丁。
+5. **新增文件不进 `src/`**。上游根本没有的文件放 `modules/<name>/files/`，否则无法区分「改」和「加」，上游升级时也看不出哪些是新增。
+
 ## patches/
 
-- 命名：`NNNN-短横线描述.patch`，四位数递增。
+- 命名：`NNNN-短横线描述.patch`，四位数递增，顺序即依赖顺序。
 - 一律 `git diff` 格式、相对上游根目录的路径（`a/src/...`）。
 - 必须能用 `patch -p1` 或 `git apply -p1` 在 `upstream.txt` 指定的基线上干净应用。
 - 含二进制文件时改用 `git diff --binary`。
-- 改上游代码就放这里；新增文件不要放这里，放模块。
+- **由 `scripts/gen_patches.sh` 从 `src/` 生成**，不手工编写、不手工改。
 
 ## modules/
 
@@ -36,7 +56,15 @@ modules/<name>/
 1. **模块之间不互相直接改文件**。A 需要 B 的符号时，用 `module.conf` 声明依赖，由应用器保证顺序，而不是让 A 去 patch B 的产物。
 2. **可关闭**。任何模块被关掉后，其余部分必须仍能编译通过；关闭逻辑只能落在 `apply.sh` 里做条件跳过，不能靠注释掉代码。
 3. **幂等**。`apply.sh` 重复执行结果一致（先检查标记，再写文件）。
-4. **新增 vs 修改**。`files/` 只负责「原仓库里没有的文件」，改已有文件一律用 `patch.patch`，这样上游升级时冲突能立刻暴露。
+4. **新增 vs 修改**。`files/` 只负责「原仓库里没有的文件」，改已有文件走 `patch.patch`，这样上游升级时冲突能立刻暴露。
+
+## 改动的三个去处
+
+| 改动类型 | 放哪 | 应用方式 |
+| --- | --- | --- |
+| 改上游已有文件 | `src/`（路径一致） | 生成 `patches/NNNN-*.patch`，按序 `git apply` |
+| 上游没有的新文件 | `modules/<name>/files/` | 整目录拷贝 |
+| 需要动构建/生成代码 | `modules/<name>/apply.sh` | 脚本钩子 |
 
 ## 分支
 
