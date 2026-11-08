@@ -1,0 +1,139 @@
+name: Build Desktop
+
+# 桌面三平台：Linux / Windows / macOS。
+# 统一流程：sh install.sh -c -f -d -p no  →  sh install.sh -po -p all  → 上传。
+#   -c 汉化上游  -f 前端补丁  -d djui_modern
+#   -p no   只编译，不打任何格式的包
+#   -po     只打包（跳过克隆/补丁/编译，直接吃上一步留下的 build-iquedx/upstream）
+# Linux 上 -po -p all 会依次尝试 deb / rpm / arch，缺工具只警告不中断。
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**']
+  pull_request:
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux (deb / rpm / tar)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          # rpm 提供 rpmbuild；包一层是给 -po -p all 的 rpm 分支用的
+          sudo apt-get install -y --no-install-recommends \
+            build-essential git python3 zip \
+            libglew-dev libsdl2-dev libz-dev libcurl4-openssl-dev \
+            rpm
+
+      - name: 参数自测（离线）
+        run: sh scripts/test_install_args.sh
+
+      - name: 编译
+        run: sh install.sh -c -f -d -p no
+
+      - name: 打包（只用已有构建产物）
+        run: sh install.sh -po -p all --path build-iquedx/upstream
+
+      - name: 列出产物
+        run: |
+          echo "== dist =="; ls -la dist | head -20
+          echo "== 安装包 =="; ls -la ./*.deb ./*.rpm ./*.pkg.tar.* 2>/dev/null || true
+
+      - name: 上传
+        uses: actions/upload-artifact@v4
+        with:
+          name: sm64iquedx-linux
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            dist/
+            *.deb
+            *.rpm
+            *.pkg.tar.zst
+            *.pkg.tar.xz
+
+  windows:
+    name: Windows (exe)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 MSYS2 依赖
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: mingw64
+          update: true
+          install: >-
+            git
+            make
+            zip
+            python3
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-glew
+            mingw-w64-x86_64-SDL2
+
+      - name: 参数自测（离线）
+        run: sh scripts/test_install_args.sh
+
+      - name: 编译
+        run: sh install.sh -c -f -d -p no
+
+      - name: 打包（Windows 不出安装包，只整理成品目录）
+        run: sh install.sh -po -p all --path build-iquedx/upstream
+
+      - name: 上传
+        uses: actions/upload-artifact@v4
+        with:
+          name: sm64iquedx-windows
+          if-no-files-found: warn
+          retention-days: 14
+          path: dist/
+
+  macos:
+    name: macOS (app / dmg)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装依赖
+        run: |
+          brew install make pkg-config sdl2 glew
+
+      - name: 参数自测（离线）
+        run: sh scripts/test_install_args.sh
+
+      - name: 编译
+        env:
+          PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig
+        run: sh install.sh -c -f -d -p no
+
+      - name: 打包（app + dmg，含 ad-hoc 签名）
+        run: sh install.sh -po -p all --path build-iquedx/upstream
+
+      - name: 列出产物
+        run: |
+          ls -la dist | head -20
+          ls -la ./*.dmg ./*.zip 2>/dev/null || true
+
+      - name: 上传
+        uses: actions/upload-artifact@v4
+        with:
+          name: sm64iquedx-macos
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            dist/
+            *.dmg
+            *.zip

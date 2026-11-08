@@ -77,6 +77,9 @@ expect_var "相对路径拼仓库根"  "--path rel/up"                UPSTREAM_D
 expect_var "-o 别名"           "-o /tmp/ph-o"                 UPSTREAM_DIR /tmp/ph-o
 expect_var "参数顺序无关"      "-p no -f -d"                  ASK_DJUI     yes
 expect_var "Android 忽略打包"  "-p deb -a"                    ASK_PACKAGE  no
+expect_var "-p all"            "-p all"                       ASK_PACKAGE  all
+expect_var "-po 短选项"        "-po"                          PACKAGE_ONLY yes
+expect_var "-po 长选项"        "--package-only"               PACKAGE_ONLY yes
 
 say_section "B. 错误路径"
 expect_die "-p 缺值"            "-p 需要一个值"                  "-p"
@@ -86,7 +89,7 @@ expect_die "-V 缺值"            "-V 需要一个值"                  "-V"
 expect_die "-p 后跟选项"        "-p 需要一个值"                  "-p -n"
 expect_die "-V 后跟选项"        "--version 需要一个值"           "--version -n"
 expect_die "--path 后跟选项"    "--path 需要一个值"              "--path --dist x"
-expect_die "非法打包方式"       "只接受 auto|deb|rpm"            "-p zip -n"
+expect_die "非法打包方式"       "只接受 auto|all|deb"            "-p zip -n"
 expect_die "未知参数"           "未知参数"                       "--nope"
 expect_die "未知短选项"         "未知参数"                       "-Z"
 
@@ -139,10 +142,16 @@ printf 'stub\n' > "$b/coopdx_updater"
 : > "$b/libdiscord_game_sdk.so"
 STUB
 cp "$S/bin/make" "$S/bin/gmake"
-chmod +x "$S/bin/git" "$S/bin/make" "$S/bin/gmake"
+# 桩 makepkg：让 -p all 的 arch 分支不真的去跑 pacman
+cat > "$S/bin/makepkg" <<'STUB'
+#!/bin/sh
+echo "[stub makepkg] $*"
+exit 0
+STUB
+chmod +x "$S/bin/git" "$S/bin/make" "$S/bin/gmake" "$S/bin/makepkg"
 
 # 桩仓库：install.sh + upstream.txt + 记录型 apply_patches.sh
-mkdir -p "$C/scripts" "$C/patches"
+mkdir -p "$C/scripts" "$C/patches" "$C/platform/pacman"
 cp "$repo/install.sh" "$repo/upstream.txt" "$C/"
 cat > "$C/scripts/apply_patches.sh" <<'STUB'
 #!/bin/sh
@@ -181,6 +190,56 @@ ls "$C/dist-and"/*.apk >/dev/null 2>&1 && ok "Android：APK 已收集" \
 # C5: Android 版不能悄悄去读 PC 的 dist
 [ ! -e "$C/dist-and/sm64coopdx" ] && ok "Android：没有误产出桌面主程序" \
     || no "Android：dist-and 里混进了桌面主程序"
+
+# C6: -po 直接拿已有产物打包，不能再打补丁/编译
+out=$(run_tree -po -p no --path "$C/up" --dist "$C/dist-po")
+po_rc=$?
+if [ "$po_rc" -eq 0 ] \
+   && ! printf '%s\n' "$out" | grep -q "ARGS\[" \
+   && [ -x "$C/dist-po/sm64coopdx" ]; then
+    ok "-po：跳过打补丁/编译，直接用已有产物收集到 dist"
+else
+    no "-po：rc=$po_rc，ARGS=[$(printf '%s\n' "$out" | grep ARGS)]，dist=$(ls "$C/dist-po" 2>/dev/null | tr '\n' ' ')"
+fi
+
+# C7: 有 --path 但那个树根本没编译过 → 255
+mkdir -p "$C/empty"
+out=$(run_tree -po -p no --path "$C/empty" --dist "$C/dist-x")
+po_rc=$?
+[ "$po_rc" -eq 255 ] && ok "-po 无产物：exit 255" || no "-po 无产物：rc=$po_rc（期望 255）"
+printf '%s\n' "$out" | grep -q "还没开始 make" \
+    && ok "-po 无产物：提示「还没开始 make」" \
+    || no "-po 无产物：提示不对 → $(printf '%s\n' "$out" | tail -n 2 | tr '\n' ' ')"
+
+# C8: -po 没给 --path → 255，并提示路径未指定
+out=$(run_tree -po -p no)
+po_rc=$?
+[ "$po_rc" -eq 255 ] && ok "-po 未指定路径：exit 255" || no "-po 未指定路径：rc=$po_rc（期望 255）"
+printf '%s\n' "$out" | grep -q "路径未指定" \
+    && ok "-po 未指定路径：提示「路径未指定」" \
+    || no "-po 未指定路径：提示不对 → $(printf '%s\n' "$out" | tail -n 1)"
+
+# C9: -p all 在缺 dpkg-deb/rpmbuild 时只警告，arch 分支照跑
+out=$(run_tree -po -p all --path "$C/up" --dist "$C/dist")
+all_rc=$?
+if [ "$all_rc" -eq 0 ] \
+   && printf '%s\n' "$out" | grep -q "跳过 .deb" \
+   && printf '%s\n' "$out" | grep -q "跳过 .rpm" \
+   && printf '%s\n' "$out" | grep -q "stub makepkg"; then
+    ok "-p all：缺工具只警告，arch 分支照跑"
+else
+    no "-p all：rc=$all_rc → $(printf '%s\n' "$out" | grep -E '跳过|makepkg|打包' | tr '\n' ' ')"
+fi
+
+# C10: -po -a 只收集 APK，不重新 gradle
+out=$(run_tree -po -a --path "$C/up-and" --dist "$C/dist-po-a")
+rc_a=$?
+if [ "$rc_a" -eq 0 ] && ls "$C/dist-po-a"/*.apk >/dev/null 2>&1 \
+   && ! printf '%s\n' "$out" | grep -q "assembleRelease"; then
+    ok "-po -a：只收集已有 APK"
+else
+    no "-po -a：rc=$rc_a，dist=$(ls "$C/dist-po-a" 2>/dev/null | tr '\n' ' ')"
+fi
 
 say_section "结果"
 printf '  通过 %d，失败 %d\n' "$pass" "$fail"

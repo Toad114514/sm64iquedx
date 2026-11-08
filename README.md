@@ -54,7 +54,8 @@ sh ./install.sh -a -c                     # 只构建 Android 汉化版 APK
 | `-c, --chinese` | 使用 `上善若和梅塔的长名字` 制作的汉化版上游仓库 `sm64coopdx-Chinese` 和 `sm64coopdx-Chinese-Android` |
 | `-f, --frontend` | 应用 `patches/0002-djui-frontend.patch`，在 设置 → 其他 里加开关；不应用时只能改配置文件 |
 | `-d, --djmd` | 应用 [djui_modern](https://github.com/Shangshanruo666/djui_modern) 模块 |
-| `-p, --package <方式>` | `auto` / `deb` / `rpm` / `arch` / `mac` / `other` / `no`；不写就不打包 |
+| `-p, --package <方式>` | `auto`（按系统）/ `all`（本机能打的全部）/ `deb` / `rpm` / `arch` / `mac` / `other` / `no`；不写就不打包 |
+| `-po, --package-only` | 不克隆/不打补丁/不编译，只用 `--path` 指向的已编译树打包；缺产物时 exit 255 |
 | `-o, --path <目录>` | 上游 checkout 位置，默认 `build-iquedx/upstream` |
 | `--dist <目录>` | 成品目录，默认 `dist/`（arch 打包写死读 `dist/`） |
 | `-V, --version <版本>` | 包版本号，默认读 `upstream.txt` 的 `version` |
@@ -70,6 +71,28 @@ sh ./install.sh -a -c                     # 只构建 Android 汉化版 APK
 - 其他 Linux / Unix → `--package other` 只提示安装命令，本体一律装在 `/opt/sm64coopdx-iquedx`
 
 Windows 目前只保证 `make` 能出 `sm64coopdx.exe`（MSYS2/MinGW），打包向导（`install.bat`）还没做。
+
+### 只打包（`-po`）
+
+编译和打包可以拆成两次执行——CI 里就是两个 job，第二个 job 只有第一个的产物：
+
+```bash
+sh install.sh -c -f -d -p no                                # 只编译
+sh install.sh -po -p all --path build-iquedx/upstream        # 只打包
+```
+
+`-po/--package-only` 跳过克隆、打补丁、编译，直接用 `--path` 指向的已编译源码树收集成品并打包：
+
+- **必须显式给 `--path`**（不接受默认值猜测）；
+- 不给 `-p` 时默认等于 `all`（本机能打的全部格式，缺工具只警告不跳过流程）；
+- 找不到构建产物时**以 `255` 退出**，并区分两种情况：「构建产物路径未指定」/「还没开始 make」。
+
+### GitHub Actions
+
+- `.github/workflows/build-desktop.yml` —— Linux / Windows / macOS 三平台，默认参数 `-c -f -d`。Linux 编译完后再用 `-po -p all` 出 `.deb` / `.rpm`（没有 `makepkg` 就跳过 Arch 包），产物按平台上传为 artifact。
+- `.github/workflows/build-android.yml` —— 默认参数 `-a -c -f -d`，装 SDK 33 + build-tools 33.0.2，跑完 `make TOUCH_CONTROLS=1` 再 `gradlew assembleRelease`，用上游自带证书签名后上传 APK。
+
+两个 workflow 都会先跑 `scripts/test_install_args.sh`(45 项，离线) 当门禁。
 
 也可以 fork 后用 GitHub Actions 自己编译，或到上善若的汉化群 https://qm.qq.com/q/twjhRVjgWs 找我要成品 *（为控制国内马里奥圈小鬼数量不直接发布）*。
 
