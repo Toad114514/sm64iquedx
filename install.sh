@@ -34,13 +34,21 @@ PACKAGE_ONLY=no         # yes = 跳过克隆/打补丁/编译，只用已有构�
 DRY_RUN=no              # yes = 只解析参数并打印结果，不克隆/不编译
 
 # ── 输出 ──────────────────────────────────────────────────────────────────────
+# 记下当前阶段：出错时 trap 能把「死在哪一步」打出来。CI 里最贵的就是
+# 「exit code 1，然后什么线索都没有」——上次 aarch64 的打包步骤就是这么瞎的。
+STAGE="启动"
 say()  { printf '%s\n' "$*"; }
-step() { printf '\n==> %s\n' "$*"; }
+step() { STAGE="$*"; printf '\n==> %s\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
 warn() { printf '[!] %s\n' "$*" >&2; }
 die()  { printf '[x] %s\n' "$*" >&2; exit 1; }
 # 255 专门表示「没有构建产物，没法打包」，CI 里据此区分「打包失败」与「没编就打包」
 die255() { printf '[x] %s\n' "$*" >&2; exit 255; }
+
+# 非 0 退出时补一行「失败于阶段」，不改变退出码
+trap 'iqdx_rc=$?; if [ "$iqdx_rc" -ne 0 ]; then
+        printf "[x] 退出码 %s，失败于阶段「%s」\n" "$iqdx_rc" "$STAGE" >&2
+      fi' EXIT
 
 usage() {
     cat <<'EOF'
@@ -457,10 +465,12 @@ do_package() {
     case "$p_way" in
         deb)
             step "打包 .deb"
+            info "sh platform/DEBIAN/mkdeb.sh $DIST_DIR $VERSION"
             sh "$repo/platform/DEBIAN/mkdeb.sh" "$DIST_DIR" "$VERSION"
             ;;
         rpm)
             step "打包 .rpm"
+            info "sh platform/rpm/mkrpm.sh $DIST_DIR $VERSION"
             sh "$repo/platform/rpm/mkrpm.sh" "$DIST_DIR" "$VERSION"
             ;;
         arch)
@@ -479,10 +489,12 @@ do_package() {
             ;;
         mac)
             step "打包 .app / .dmg"
+            info "sh platform/darwin/mkmac.sh $DIST_DIR $VERSION"
             sh "$repo/platform/darwin/mkmac.sh" "$DIST_DIR" "$VERSION"
             ;;
         zip)
             step "打包便携 zip"
+            info "sh platform/portable/mkzip.sh $DIST_DIR $VERSION"
             sh "$repo/platform/portable/mkzip.sh" "$DIST_DIR" "$VERSION"
             ;;
         other)

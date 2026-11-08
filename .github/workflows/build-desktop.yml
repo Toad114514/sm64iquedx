@@ -137,8 +137,13 @@ jobs:
       - name: 编译
         run: sh install.sh -c -f -d -p no
 
-      - name: 打包（只用已有构建产物）
-        run: sh install.sh -po -p all --path build-iquedx/upstream
+      # aarch64 拆成两步打：坏在 deb 还是 zip，一眼就看出来。
+      # （`-p all` 在 Linux 上会一次跑 deb/rpm/arch/zip，出错只剩一个 exit code）
+      - name: 打包 .deb
+        run: sh install.sh -po -p deb --path build-iquedx/upstream
+
+      - name: 打包便携 zip
+        run: sh install.sh -po -p zip --path build-iquedx/upstream
 
       - name: 打包 Arch（官方 archlinux 镜像没有 arm64，用 menci/archlinuxarm）
         run: |
