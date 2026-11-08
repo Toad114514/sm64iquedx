@@ -1,5 +1,5 @@
 #!/bin/sh
-# 一次生成全部补丁。改了 src/ 后跑这个，不要单独手改 patches/*.patch。
+# 一次生成三份「四套上游共用」的补丁。改了 src/ 后跑这个，不要单独手改 patches/*.patch。
 #
 #   scripts/gen_all_patches.sh <上游基线根目录>
 #
@@ -15,24 +15,47 @@ fi
 root=$(cd "$(dirname "$0")/.." && pwd)
 upstream=$(cd "$1" && pwd)
 gen="$root/scripts/gen_patches.sh"
+P="$root/patches"
 
 # 可选补丁：DJUI 设置面板里的「中文字库（神游）」开关。
 # 不应用它时只能改 config 文件切换，且其它改动仍能独立编译。
-# 注意 djui_panel_confirm.[ch] 不能一起移走：pc_main.c 的首启确认框
-# 硬依赖 djui_panel_confirm_create_ex()，拆走会导致不应用本补丁时链接失败。
+# djui_panel_confirm.[ch] 留在 0001：它加的 create_ex() 目前没有调用点
+# （首启确认框已改成按神游 ROM 自动判定），保留只是为了以后恢复确认框时省事。
 FRONTEND=src/pc/djui/djui_panel_misc.c
 
-sh "$gen" "$upstream" "$root/patches/0001-src-overlay.patch" --exclude "$FRONTEND"
-sh "$gen" "$upstream" "$root/patches/0002-djui-frontend.patch" --only "$FRONTEND"
+# 语言文件只是往 ini 里加字符串（CHINESE_TEXT_PACK / Chinese 语言条目），
+# 各上游的 ini 行号与自带条目不同，混进主补丁会让主补丁在 Android 上打不上。
+# 因此整个 lang/ 前缀独立成 0003，0001 自己就避开它，不靠应用器 --exclude。
+LANG_PREFIX=lang/
 
-# 断言：两个补丁互不重叠，且 0002 只动前端那一个文件
-if grep -q "^--- a/$FRONTEND$" "$root/patches/0001-src-overlay.patch"; then
+MAIN="$P/0001-src-overlay.patch"
+FRONT_PATCH="$P/0002-djui-frontend.patch"
+LANG_PATCH="$P/0003-lang-strings.patch"
+
+sh "$gen" "$upstream" "$MAIN" --exclude "$FRONTEND" --exclude "$LANG_PREFIX"
+sh "$gen" "$upstream" "$FRONT_PATCH" --only "$FRONTEND"
+sh "$gen" "$upstream" "$LANG_PATCH" --only "$LANG_PREFIX"
+
+# ---- 分工断言：三段互不重叠，且各自只含该含的文件 ----
+if grep -q "^--- a/$FRONTEND$" "$MAIN"; then
     echo "错误: 0001 里仍含前端文件 $FRONTEND" >&2
     exit 1
 fi
-n=$(grep -c '^--- a/' "$root/patches/0002-djui-frontend.patch" || true)
-if [ "$n" -ne 1 ] || ! grep -q "^--- a/$FRONTEND$" "$root/patches/0002-djui-frontend.patch"; then
+if grep -q '^--- a/lang/' "$MAIN"; then
+    echo "错误: 0001 里仍含 lang/*.ini，语言字符串应走 0003" >&2
+    exit 1
+fi
+n=$(grep -c '^--- a/' "$FRONT_PATCH" || true)
+if [ "$n" -ne 1 ] || ! grep -q "^--- a/$FRONTEND$" "$FRONT_PATCH"; then
     echo "错误: 0002 应只含 $FRONTEND，实际含 $n 个文件" >&2
     exit 1
 fi
-echo "✅ 0001 主补丁 / 0002 前端补丁分工正确" >&2
+if grep '^--- a/' "$LANG_PATCH" | grep -qv '^--- a/lang/'; then
+    echo "错误: 0003 里混入了非 lang/ 文件" >&2
+    exit 1
+fi
+if grep -q "^--- a/$FRONTEND$" "$LANG_PATCH"; then
+    echo "错误: 0003 里含前端文件，与 0002 重叠" >&2
+    exit 1
+fi
+echo "✅ 0001 核心 / 0002 前端 / 0003 语言字符串分工正确" >&2

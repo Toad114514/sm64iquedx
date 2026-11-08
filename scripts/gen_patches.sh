@@ -5,7 +5,8 @@
 #
 # 上游根目录 = 与 upstream.txt 声明的 commit 一致的干净 checkout。
 # 默认输出 patches/0001-src-overlay.patch，可被 `git apply -p1` / `patch -p1` 应用。
-# --only / --exclude 按相对路径前缀筛选（各一个），用于把可选改动拆成独立补丁。
+# --only / --exclude 按相对路径前缀筛选，可各重复多次（取并集），
+# 用于把前端、语言字符串等独立改动拆成各自的补丁。
 set -eu
 
 if [ $# -lt 1 ]; then
@@ -23,12 +24,13 @@ else
     out=patches/0001-src-overlay.patch
 fi
 
+# 前缀列表用空格分隔（仓库内路径不含空格），可重复给 --only / --exclude。
 only=""
 exclude=""
 while [ $# -gt 0 ]; do
     case "$1" in
-        --only)    [ $# -ge 2 ] || { echo "--only 需要参数" >&2; exit 2; }; only=$2;    shift 2;;
-        --exclude) [ $# -ge 2 ] || { echo "--exclude 需要参数" >&2; exit 2; }; exclude=$2; shift 2;;
+        --only)    [ $# -ge 2 ] || { echo "--only 需要参数" >&2; exit 2; }; only="$only $2";    shift 2;;
+        --exclude) [ $# -ge 2 ] || { echo "--exclude 需要参数" >&2; exit 2; }; exclude="$exclude $2"; shift 2;;
         *) echo "未知参数：$1" >&2; exit 2;;
     esac
 done
@@ -45,10 +47,18 @@ while IFS= read -r f; do
     rel=${f#"$root/src/"}
 
     if [ -n "$only" ]; then
-        case "$rel" in "$only"*) ;; *) continue ;; esac
+        match=no
+        for pat in $only; do
+            case "$rel" in "$pat"*) match=yes ;; esac
+        done
+        if [ "$match" != yes ]; then continue; fi
     fi
     if [ -n "$exclude" ]; then
-        case "$rel" in "$exclude"*) continue ;; esac
+        skip=no
+        for pat in $exclude; do
+            case "$rel" in "$pat"*) skip=yes ;; esac
+        done
+        if [ "$skip" = yes ]; then continue; fi
     fi
 
     target="$upstream/$rel"
@@ -77,10 +87,12 @@ while IFS= read -r f; do
     count=$((count + 1))
 done < "$work/list"
 
+# 即使没有差异也写一个空文件：否则 src/ 里删掉某个分组后会残留上一次的旧补丁。
+# 应用器遇到空补丁会直接跳过。
+mkdir -p "$(dirname "$out")"
+cat "$work/out.patch" > "$out"
 if [ "$count" -gt 0 ]; then
-    mkdir -p "$(dirname "$out")"
-    cat "$work/out.patch" > "$out"
     echo "已生成 $out（$count 个文件）" >&2
 else
-    echo "筛出的文件与基线一致，无需生成补丁" >&2
+    echo "筛出的文件与基线一致，$out 置空" >&2
 fi
