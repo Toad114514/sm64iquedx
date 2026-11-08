@@ -8,7 +8,7 @@ android = https://github.com/ManIsCat2/sm64coopdx
 android-commit = 99c8d21abe4d24649b508d0f216c4359ed5d2a7a
 
 # 上善若&梅塔的长名字的汉化 / 神游马力欧64CoopDX   - Substition 汉化 1.0.1 (v1.5.2)
-cn-repo   = https://github.com/Shangshanruo66958/sm64coopdx-Chinese
+cn-repo   = https://github.com/Shangshanruo66/sm64coopdx-Chinese
 cn-commit = 110b96d59b775bbd7ae367444ad0df2d30aa5d49
 android-cn-repo = https://github.com/Shangshanruo666/sm64coopdx-Chinese-Android
 android-cn-commit = fba3a7470d00c5e8f40ebdc9d051003bbed65882
