@@ -54,6 +54,7 @@ patches/cn_extra/src/game/cn_font.c       → 上游 src/game/cn_font.c
 patches/cn_extra/src/game/cn_tex.c        → 上游 src/game/cn_tex.c
 patches/cn_extra/text/cn_dialogs_cn.inc.c → 上游 text/cn_dialogs_cn.inc.c
 patches/cn_extra/lang/Chinese.ini         → 上游 lang/Chinese.ini（PC 上游没有中文）
+patches/cn_extra/src/pc/djui/cn_glyphs.h  → 上游 src/pc/djui/cn_glyphs.h（djui_modern 硬依赖，见 patches/README.md）
 ```
 
 - 不打成 `.patch`：新增文件通常是大体积字形表 / 生成产物，做文本 diff 没有意义，`git apply` 也容易因上下文漂移失败。
@@ -240,8 +241,8 @@ DESTDIR=/tmp/stage sh platform/freedesktop/install.sh <目录>   # 装进 stagin
 ## 现状（快照，以 git log 为准）
 
 - `src/` 26 个文件：Makefile、text/define_{courses,text}.inc.c、`src/game|menu|pc` 下 23 个（含 `rom_checker.h`）。**`lang/English.ini` 不在其中**：它的改动只有两条字符串，由 `scripts/add_lang_strings.sh` 在应用时插入，脚本对基线跑一次即得到与实验工作区逐字节相同的文件。
-- `patches/cn_extra/` 13 个上游不存在的文件：`cn_font`、`cn_tex`、`cn_data/*.h`、`cn_intro_data.c`、`text/cn_*.inc.c`、`src/pc/rom_checker_ique.cpp`、`lang/Chinese.ini`；均已用 `git cat-file -e 8cd6e59:<path>` 确认上游不存在，且与实验工作区逐字节一致。
+- `patches/cn_extra/` 14 个上游不存在的文件：`cn_font`、`cn_tex`、`cn_data/*.h`、`cn_intro_data.c`、`text/cn_*.inc.c`、`src/pc/rom_checker_ique.cpp`、`lang/Chinese.ini`、`src/pc/djui/cn_glyphs.h`；除最后一份（给没有汉化字表的原版上游补 djui_modern 的硬依赖，见 `patches/README.md`）外，均已用 `git cat-file -e 8cd6e59:<path>` 确认上游不存在，且与实验工作区逐字节一致。
 - 4 份补丁**平铺**在 `patches/`：0001（25 文件，必选）、0002（1 文件，可选前端）、0005（4 文件，原版 Android 平台）、0006（4 文件，汉化版 Android 平台）。0001 不含任何 `lang/*.ini`。
-- 校验：`8cd6e59` + 0001 + 0002 + `cn_extra/` + `add_lang_strings.sh` 与 `src/` 26/26 逐字节一致，`lang/English.ini` 与实验工作区一致；两个 Android 上游应用后与三方合并终态 27 文件逐字节一致；三套基线首次应用 + 幂等复跑均通过；`cn_extra` 13/13 一致，无冲突标记残留。
+- 校验：`8cd6e59` + 0001 + 0002 + `cn_extra/` + `add_lang_strings.sh` 与 `src/` 26/26 逐字节一致，`lang/English.ini` 与实验工作区一致；两个 Android 上游应用后与三方合并终态 27 文件逐字节一致；三套基线首次应用 + 幂等复跑均通过；`cn_extra` 14/14 一致，无冲突标记残留。
 - `platform/`：DEBIAN（`control.in` + `mkdeb.sh`）、pacman（`PKGBUILD` + `.install`）、rpm（`sm64coopdx-iquedx.spec` + `mkrpm.sh`）、darwin（`Info.plist.in` + `mkmac.sh`）、freedesktop（`.desktop` + PNG 图标 + `install.sh`）。
 - 汉化版上游自带的 `palettes/*.ini`、`src/pc/djui/*_glyphs.h`、`textures/custom_font/*.png` 属于所选上游本身，不在本仓库收录范围；它自带的 `lang/Chinese.ini` 也不会被 `cn_extra/` 覆盖（只补缺）。

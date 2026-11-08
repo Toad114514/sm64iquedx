@@ -8,7 +8,7 @@
 | `0002-djui-frontend.patch` | 1 | 三目标共用 | 可选，设置 → 其他 的「中文字库」开关 |
 | `0005-android.patch` | 4 | `android` 专用 | 必选，Android 平台增量 |
 | `0006-android-cn.patch` | 4 | `android-cn` 专用 | 必选，Android 平台增量 |
-| `cn_extra/` | 13 | 三目标共用 | 上游不存在的新增文件，仅补缺、不覆盖 |
+| `cn_extra/` | 14 | 三目标共用 | 上游不存在的新增文件，仅补缺、不覆盖 |
 
 四套上游与目标名的对应见仓库根 `upstream.txt`；`pc` 同时覆盖原版 CoopDX 与上善若的 PC 汉化版。
 
@@ -81,7 +81,7 @@ theirs = 本仓库 src/（PC 终态）
 
 ## cn_extra/ 是「新增文件」，只补缺不覆盖
 
-`cn_extra/` 收录 13 个上游不存在的文件，其中包括 **`lang/Chinese.ini`**（PC 上游 `lang/` 只有 11 种语言，没有中文；汉化版 Android 则有自己的一份）。因此应用时逐个文件判断：目标已存在就跳过，只补缺。
+`cn_extra/` 收录 14 个上游不存在的文件，其中包括 **`lang/Chinese.ini`**（PC 上游 `lang/` 只有 11 种语言，没有中文；汉化版 Android 则有自己的一份）和 **`src/pc/djui/cn_glyphs.h`**（见下节）。因此应用时逐个文件判断：目标已存在就跳过，只补缺。
 
 ```bash
 # scripts/apply_patches.sh 内部语义
@@ -89,6 +89,42 @@ theirs = 本仓库 src/（PC 终态）
 ```
 
 这条不是多余的保险：汉化版 Android 自带的 `lang/Chinese.ini` 与 PC 那份内容并不完全相同（它有自己的触屏相关条目），整目录 `cp -R` 会把它顶掉。已用哨兵内容实测：应用后上游内容保留，只在 `DISABLE_POPUPS` 后多出一行。原版 Android 上游没有 `lang/Chinese.ini`，于是直接拿到 PC 那份——它的触屏相关字符串会回落到英文，这是可接受的取舍。
+
+## djui_modern 兼容
+
+[`Shangshanruo666/djui_modern`](https://github.com/Shangshanruo666/djui_modern)（`upstream.txt` 的 `djmd_commit`）是一套挂在 `src/pc/djui_modern` 下、并向上游 djui 文件打 9 个桌面补丁 / 10 个 Android 补丁的模块。它和本仓库的补丁**文件级没有重叠**：它改 `djui.c`、`djui_rect.c`、`djui_gfx.c`、`djui_hud_utils.c`、`djui_unicode.c`、`djui_text.c`、`djui_panel_host_mods.c`、`gfx_dxgi.cpp`，我们改 `djui_panel_confirm.[ch]` 和 `djui_panel_misc.c`。
+
+两边都会碰的只有构建文件，且位置互不相邻、能带偏移应用：
+
+| 文件 | 我们 | djui_modern | 结果 |
+| --- | --- | --- | --- |
+| `Makefile` | `~L194` 加 `CN_TEXT_PACK`、`~L454` 加 flip guard | `~L470` 的 `SRC_DIRS` 行插 `src/pc/djui_modern` | 可应用（上下文不重叠） |
+| `Android.mk` | `~L106` 的 `LOCAL_CFLAGS` 后加 `SM64COOPDX_CN_TEXT` | `~L70` 的 `SRC_DIRS` 行插 `src/pc/djui_modern` | 可应用 |
+
+实测（基线取自 `upstream.txt`，桌面双向、Android 两个上游各一遍）：`0001`/`0002`/`0005`/`0006` 与 djui_modern 的 9 个桌面补丁、2 个 Android 构建补丁，**正向反向都干净应用，零冲突**。
+
+**真正的问题不在补丁、而在缺文件**：`djui_modern_font_atlas.c` 里有一行
+
+```c
+static const DjuiModernCnGlyph kCnGlyphs[] = {
+#include "pc/djui/cn_glyphs.h"
+};
+```
+
+它把 `src/pc/djui/cn_glyphs.h` 当**数组初始化列表**包进来，而这个文件是**汉化上游自带的**（6790 行 GB2312 表）。所以在 **PC 原版 / Android 原版** 上装 djui_modern，`#include` 找不到文件 → 编译直接失败；只有两个汉化上游能编过。
+
+因此 `cn_extra/` 收录一份 `src/pc/djui/cn_glyphs.h`：由 iQue 字表（`cn_map.json`，与 `cn_data/cn_glyphs_16x16.h` 同一张表）生成的 1061 行 `{ "字", 32, 30, 0 },`。注意：
+
+- 它是**数组初始化片段**，写 `#ifndef` 守卫或任何声明都会编译失败；
+- djui_modern 只读 `unicode` 字段（用来预载常用字，避免 CJK 字体在 `CHARSET_MAX` 处截断），`base/width/spriteIndex` 只是占位，取值与汉化上游一致；
+- 表外的字符仍会由模块扫描字体 cmap 补齐；
+- 汉化上游已有自己的 6790 行版本，`cn_extra/` 只补缺不覆盖，所以那份原样保留。
+
+改动 `cn_map.json` 后需要重新生成（生成逻辑同上，一次性脚本，不入库）：
+
+```python
+# 只保留非 ASCII、UTF-8 ≤3 字节的字符，按码位排序，输出 `{ "字", 32, 30, 0 },`
+```
 
 ## 应用
 
