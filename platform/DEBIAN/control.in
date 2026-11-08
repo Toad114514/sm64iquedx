@@ -1,7 +1,11 @@
 Package: sm64coopdx-iquedx
-Version: 1.5.1
-Section: Games
-Priority: extra
-Architecture: amd64, aarch64
+Version: @VERSION@
+Section: games
+Priority: optional
+Architecture: @ARCH@
 Maintainer: Toad114514 <xiaolan2332021@163.com>
-Description: 带 IQue Rom 汉化支持的 Super Mario 64 Co-op Deluxe
+Depends: libsdl2-2.0-0, libgl1, zlib1g, libcurl4, libstdc++6
+Description: Super Mario 64 Co-op Deluxe with iQue Chinese text support
+ 带神游（iQue）简体中文文本包的 Super Mario 64 联机豪华版。
+ .
+ 游戏本体安装在 /opt/sm64coopdx-iquedx，并附带 freedesktop 启动器与图标。

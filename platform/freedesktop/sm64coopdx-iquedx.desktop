@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=Super Mario 64 Co-op Deluxe (iQue)
+Name[zh_CN]=超级马力欧64 联机豪华版（神游汉化）
+GenericName=Platform Game
+GenericName[zh_CN]=3D 平台跳跃游戏
+Comment=Super Mario 64 Co-op Deluxe with iQue Chinese text support
+Comment[zh_CN]=带神游（iQue）简体中文文本包的 Super Mario 64 联机豪华版
+Exec=/opt/sm64coopdx-iquedx/sm64coopdx
+Icon=sm64coopdx-iquedx
+Terminal=false
+Categories=Game;ActionGame;
+Keywords=mario;sm64;n64;platform;coop;ique;chinese;
+Keywords[zh_CN]=马力欧;马里奥;神游;汉化;联机;
