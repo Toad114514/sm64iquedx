@@ -1,0 +1,11 @@
+pkgname="sm64coopdx-iquedx"
+pkgver="v1.5.1"
+pkgrel="1"
+
+pkgdesc="带 IQue Rom 汉化支持的 Super Mario 64 Co-op Deluxe"
+
+arch=('x86_64', 'amd64', 'aarch64')
+source="https://github.com/toad114514/sm64iquedx"
+license=("MIT License")
+
+sha256sums=('SKIP')
