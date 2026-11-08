@@ -271,6 +271,20 @@ printf '%s\n' "$out" | grep -q "还没开始 make" \
     && ok "-po 无产物：提示「还没开始 make」" \
     || no "-po 无产物：提示不对 → $(printf '%s\n' "$out" | tail -n 2 | tr '\n' ' ')"
 
+# C7b: macOS 上 make 把可执行文件 mv 进 .app，build/us_pc/sm64coopdx 根本
+#      不存在。-po 必须认 .app 里的那份，否则 CI 上「编完了却说还没开始 make」。
+mkdir -p "$C/appup/build/us_pc/sm64coopdx.app/Contents/MacOS" \
+         "$C/appup/build/us_pc/sm64coopdx.app/Contents/Resources/lang"
+printf '#!/bin/sh\necho stub\n' > "$C/appup/build/us_pc/sm64coopdx.app/Contents/MacOS/sm64coopdx"
+chmod +x "$C/appup/build/us_pc/sm64coopdx.app/Contents/MacOS/sm64coopdx"
+out=$(run_tree -po -p no --path "$C/appup" --dist "$C/dist-app")
+po_rc=$?
+if [ "$po_rc" -eq 0 ] && [ -x "$C/dist-app/sm64coopdx" ]; then
+    ok "-po 认 .app 里的主程序（macOS 产物形态）"
+else
+    no "-po .app：rc=${po_rc}，dist=$(ls "$C/dist-app" 2>/dev/null | tr '\n' ' ')"
+fi
+
 # C8: -po 没给 --path → 255，并提示路径未指定
 out=$(run_tree -po -p no)
 po_rc=$?

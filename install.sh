@@ -208,8 +208,82 @@ build_pc() {
         # 就跑不起来。collect_dist 会把 .app 摊平成 dist/。
         info "$b_make OSX_BUILD=1 -j$jobs"
         ( cd "$b_up" && $b_make OSX_BUILD=1 -j"$jobs" )
+        fix_mac_bundle "$b_up"
     else
         ( cd "$b_up" && $b_make -j"$jobs" )
+    fi
+}
+
+# 修 .app 里缺的 dylib。
+#
+# 上游 Makefile 的 app bundle 段这么找库：
+#     GLEW_LIB := $(shell find $(BREW_PREFIX)/lib/ | grep libGLEW.2.2.0 | sort -n | uniq)
+#     SDL2_LIB := $(shell find $(BREW_PREFIX)/lib/ | grep libSDL2-     | sort -n | uniq)
+# 两个坑：
+#   1. brew 的 glew 已经是 2.3.x，`grep libGLEW.2.2.0` 匹配不到 → GLEW_LIB 为空
+#      → `cp  <dest>/libGLEW.dylib`（只有一个参数）报 No such file or directory；
+#   2. `find | grep libSDL2-` 可能命中多个（sdl2 / sdl2-compat 的别名），
+#      多个源 + 文件当目标 → `cp: <dest>/libSDL2.dylib: Not a directory`。
+# 两处都不中断 make，于是 .app 少两个库，而可执行文件的 install_name 已经被
+# 改成 @executable_path/libSDL2.dylib → 换台机器直接起不来。
+# 这里按 brew 里的真实文件补回去（版本号会涨，所以用 glob 取最新的那个）。
+fix_mac_bundle() {
+    f_dir="$1/build/us_pc/sm64coopdx.app/Contents/MacOS"
+    f_exe="$f_dir/sm64coopdx"
+    [ -f "$f_exe" ] || return 0
+
+    f_brew=$(brew --prefix 2>/dev/null || printf '%s' /opt/homebrew)
+    f_fixed=0
+
+    for f_spec in "libSDL2.dylib|libSDL2-2.0.0.dylib|libSDL2-*.dylib" \
+                  "libGLEW.dylib|libGLEW.dylib|libGLEW*.dylib"; do
+        f_dst=${f_spec%%|*}
+        f_rest=${f_spec#*|}
+        f_prefer=${f_rest%%|*}
+        f_glob=${f_rest#*|}
+
+        # 包里已经有了（且不是空文件）就不动
+        if [ -s "$f_dir/$f_dst" ]; then
+            continue
+        fi
+
+        f_src=""
+        if [ -f "$f_brew/lib/$f_prefer" ]; then
+            f_src="$f_brew/lib/$f_prefer"
+        else
+            for f_cand in "$f_brew"/lib/$f_glob; do
+                [ -f "$f_cand" ] && f_src="$f_cand"
+            done
+        fi
+        if [ -z "$f_src" ]; then
+            warn "找不到 ${f_dst}（${f_brew}/lib 下没有 ${f_glob}），.app 会缺这个库"
+            continue
+        fi
+
+        cp -f "$f_src" "$f_dir/$f_dst" || { warn "拷贝 $f_dst 失败"; continue; }
+        chmod u+w "$f_dir/$f_dst" 2>/dev/null || true
+        install_name_tool -id "@executable_path/$f_dst" "$f_dir/$f_dst" >/dev/null 2>&1 || true
+
+        # 把可执行文件里指向这个库的所有绝对路径改成 @executable_path/
+        chmod u+w "$f_exe" 2>/dev/null || true
+        otool -L "$f_exe" 2>/dev/null | awk 'NR > 1 { print $1 }' | while read -r f_ref; do
+            case "$f_ref" in
+                @executable_path/*) continue ;;
+                */libSDL2*.dylib) [ "$f_dst" = libSDL2.dylib ] || continue ;;
+                */libGLEW*.dylib) [ "$f_dst" = libGLEW.dylib ] || continue ;;
+                *) continue ;;
+            esac
+            install_name_tool -change "$f_ref" "@executable_path/$f_dst" "$f_exe" >/dev/null 2>&1 || true
+        done
+
+        codesign --force --sign - "$f_dir/$f_dst" >/dev/null 2>&1 || true
+        info "补进 ${f_dst}（${f_src}）"
+        f_fixed=1
+    done
+
+    if [ "$f_fixed" = 1 ]; then
+        # 改过 install_name_tool 的可执行文件签名失效，必须重新 ad-hoc 签
+        codesign --force --sign - "$f_exe" >/dev/null 2>&1 || true
     fi
 }
 
@@ -699,7 +773,13 @@ if [ "$PACKAGE_ONLY" = yes ]; then
             break
         fi
     done
-    [ -n "$p_bin" ] || die255 "还没开始 make：找不到 $UPSTREAM_DIR/build/us_pc/sm64coopdx（先编译，或检查 --path）"
+    # macOS 上 make 会把可执行文件 mv 进 .app（然后连 .app 一起搬回
+    # build/us_pc/），所以 build/us_pc/sm64coopdx 根本不存在。
+    p_app="$UPSTREAM_DIR/build/us_pc/sm64coopdx.app/Contents/MacOS/sm64coopdx"
+    if [ -z "$p_bin" ] && [ -f "$p_app" ]; then
+        p_bin="$p_app"
+    fi
+    [ -n "$p_bin" ] || die255 "还没开始 make：找不到 $UPSTREAM_DIR/build/us_pc/sm64coopdx（或 sm64coopdx.app）（先编译，或检查 --path）"
 
     info "构建产物：$p_bin"
     collect_dist "$UPSTREAM_DIR"

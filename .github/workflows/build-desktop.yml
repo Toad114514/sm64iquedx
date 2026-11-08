@@ -174,6 +174,23 @@ jobs:
           PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig
         run: sh install.sh -c -f -d -p no
 
+      - name: 检查 .app 自包含（不能链回 /opt/homebrew）
+        run: |
+          app=build-iquedx/upstream/build/us_pc/sm64coopdx.app/Contents/MacOS
+          ls -l "$app"
+          bad=$(otool -L "$app/sm64coopdx" | grep -E '/opt/homebrew|/usr/local' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::可执行文件还链着 brew 里的库（换台机器跑不起来）："
+            printf '%s\n' "$bad"
+            exit 1
+          fi
+          for lib in libSDL2.dylib libGLEW.dylib; do
+            if [ ! -s "$app/$lib" ]; then
+              echo "::error::.app 缺 $lib"
+              exit 1
+            fi
+          done
+
       - name: 打包（app + dmg，含 ad-hoc 签名）
         run: sh install.sh -po -p all --path build-iquedx/upstream
 
