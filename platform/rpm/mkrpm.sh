@@ -98,4 +98,4 @@ fi
 out=$repo/$(basename "$rpmfile")
 cp "$rpmfile" "$out"
 echo "已生成 $out"
-echo "安装：sudo dnf install $out   （openSUSE: sudo zypper in $out）"
+echo "安装：sudo dnf install $out 或者 openSUSE: sudo zypper in $out"

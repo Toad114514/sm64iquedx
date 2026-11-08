@@ -95,4 +95,4 @@ gtk-update-icon-cache -q -t /usr/share/icons/hicolor >/dev/null 2>&1 || :
 
 %changelog
 * Mon Nov 09 2026 Toad114514 <xiaolan2332021@163.com> - 1.5.1-1
-- 首次打包：只装成品目录 + 启动器 + 图标，依赖按发行版分支
+- 你认为你是 changelog 吗？我觉得我是。请到 Github 查看 commit 历史那个就是 changelog
