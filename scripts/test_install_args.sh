@@ -28,6 +28,16 @@ tmo() {
     if [ -n "$TMO" ]; then "$TMO" "$t_secs" "$@"; else "$@"; fi
 }
 
+# MSYS2 默认以 noacl 挂载：chmod 是空操作，一个没有扩展名的文件永远
+# 不被当成可执行（`[ -x foo ]` 恒假）。Windows 上「有没有 x 位」本来就没意义，
+# 所以断言文件存在就够了；Linux/macOS 上仍然要真的可执行。
+is_exe() {
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) [ -f "$1" ] ;;
+        *)                    [ -x "$1" ] ;;
+    esac
+}
+
 # 断言 --print-config 里 KEY=期望值
 expect_var() {
     # expect_var <用例名> <参数串> <KEY> <期望>
@@ -236,7 +246,7 @@ echo "$out" | grep -q "ARGS\[pc $C/up\]" \
     || no "PC 无前端：→ $(echo "$out" | grep ARGS)"
 
 # C3: 成品落在 --dist 指定的目录
-[ -x "$C/dist/sm64coopdx" ] && ok "成品目录：主程序落在 --dist" \
+is_exe "$C/dist/sm64coopdx" && ok "成品目录：主程序落在 --dist" \
     || no "成品目录：$C/dist 里没有主程序"
 
 # C4: Android 汉化 → TARGET=android-cn 传给 apply_patches.sh，且不出桌面包
@@ -256,7 +266,7 @@ out=$(run_tree -po -p no --path "$C/up" --dist "$C/dist-po")
 po_rc=$?
 if [ "$po_rc" -eq 0 ] \
    && ! printf '%s\n' "$out" | grep -q "ARGS\[" \
-   && [ -x "$C/dist-po/sm64coopdx" ]; then
+   && is_exe "$C/dist-po/sm64coopdx"; then
     ok "-po：跳过打补丁/编译，直接用已有产物收集到 dist"
 else
     no "-po：rc=${po_rc}，ARGS=[$(printf '%s\n' "$out" | grep ARGS)]，dist=$(ls "$C/dist-po" 2>/dev/null | tr '\n' ' ')"
@@ -279,7 +289,7 @@ printf '#!/bin/sh\necho stub\n' > "$C/appup/build/us_pc/sm64coopdx.app/Contents/
 chmod +x "$C/appup/build/us_pc/sm64coopdx.app/Contents/MacOS/sm64coopdx"
 out=$(run_tree -po -p no --path "$C/appup" --dist "$C/dist-app")
 po_rc=$?
-if [ "$po_rc" -eq 0 ] && [ -x "$C/dist-app/sm64coopdx" ]; then
+if [ "$po_rc" -eq 0 ] && is_exe "$C/dist-app/sm64coopdx"; then
     ok "-po 认 .app 里的主程序（macOS 产物形态）"
 else
     no "-po .app：rc=${po_rc}，dist=$(ls "$C/dist-app" 2>/dev/null | tr '\n' ' ')"
@@ -378,7 +388,7 @@ mkdir -p "$C/up-arm/build/us_pc/lang"
 printf 'stub\n' > "$C/up-arm/build/us_pc/sm64coopdx.arm"
 chmod +x "$C/up-arm/build/us_pc/sm64coopdx.arm"
 out=$(run_tree -po -p no --path "$C/up-arm" --dist "$C/dist-arm")
-if [ -x "$C/dist-arm/sm64coopdx" ] && [ ! -e "$C/dist-arm/sm64coopdx.arm" ]; then
+if is_exe "$C/dist-arm/sm64coopdx" && [ ! -e "$C/dist-arm/sm64coopdx.arm" ]; then
     ok "aarch64：sm64coopdx.arm 收集时改名成 sm64coopdx"
 else
     no "aarch64：改名失败 → $(ls "$C/dist-arm" 2>/dev/null | tr '\n' ' ')"
