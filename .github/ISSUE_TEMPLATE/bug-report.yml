@@ -1,0 +1,186 @@
+name: Bug 报告（表单）
+description: 汉化补丁（sm64iquedx）相关的崩溃、乱码、显示错位、功能失效等问题
+title: "[Bug] "
+labels: ["bug"]
+assignees: ["Toad114514"]
+type: Bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！**一至四为必填**，五至七可选，但填了能大幅加快定位速度。
+
+        > 本仓库只负责「汉化补丁 + 打包脚本」本身。如果换成不打任何补丁的纯上游也能复现，请提到对应上游仓库去。
+
+  # ── 一、声明 ──────────────────────────────────────────────
+  - type: checkboxes
+    id: declaration
+    attributes:
+      label: 一、声明
+      description: 提交前请逐项确认，全部勾选后才能提交。
+      options:
+        - label: 我已搜索过本仓库的 Issues（含已关闭的）和 Discussions，确认没有人报告过同样的问题。
+          required: true
+        - label: 我已尝试用不打任何补丁的纯上游构建一次，确认该问题不是上游自身、也不是我的构建/打包环境造成的；若纯上游同样能复现，我已在第二部分说明。
+          required: true
+        - label: 我已排除常见操作失误：补丁没打全 / 没用 `apply_patches.sh` 按顺序应用 / 改过 `CN_TEXT_PACK` 后没有全量重编 / ROM 不是神游 dump / 存档或配置文件被旧版本污染。
+          required: true
+        - label: 我是在最新版本（最新分支 + 最新补丁，或最新 Release）上复现的，不是几个月前的旧构建。
+          required: true
+
+  # ── 二、发生了什么 ────────────────────────────────────────
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 二、发生了什么
+      description: 写清实际表现和你期望的表现。文字类问题请直接贴出错误文本（例如「暂停菜单课程名显示为方块」「对话第 3 行被截断」）。
+      value: |
+        实际表现：
+        ……
+
+        期望表现：
+        ……
+    validations:
+      required: true
+
+  # ── 三、复现步骤 ──────────────────────────────────────────
+  - type: textarea
+    id: steps
+    attributes:
+      label: 三、复现步骤
+      description: 从启动游戏开始一步一步写。能稳定复现的步骤才算数；如果是偶发，请注明大约几次出现一次。
+      value: |
+        1. 启动游戏，进入 ……
+        2. 选择 ……
+        3. 看到 ……
+      render: markdown
+    validations:
+      required: true
+
+  # ── 四、编译选项 ──────────────────────────────────────────
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 平台
+      description: 你实际运行的是哪一套构建。
+      options:
+        - PC
+        - Android
+        - PC 汉化
+        - Android 汉化
+    validations:
+      required: true
+
+  - type: input
+    id: upstream
+    attributes:
+      label: 上游链接
+      description: 你使用的上游仓库，最好带上分支或 commit。汉化上游请注明是哪个 fork。
+      placeholder: https://github.com/coop-deluxe/sm64coopdx @ 8cd6e5977
+    validations:
+      required: true
+
+  - type: input
+    id: patch-version
+    attributes:
+      label: 补丁版本
+      description: 本仓库的 commit / tag，或你用的哪个 Release 包。
+      placeholder: ccc33ce（main）
+    validations:
+      required: true
+
+  - type: dropdown
+    id: frontend-patch
+    attributes:
+      label: 是否启用配置前端补丁
+      description: 即 `0002-djui-frontend.patch`（设置 → 其他 里的「中文字库」复选框）；用 `apply_patches.sh` 时是否加了 `--frontend`。
+      options:
+        - 已启用（带 --frontend）
+        - 未启用
+        - 不清楚（用的现成发行包）
+    validations:
+      required: true
+
+  - type: dropdown
+    id: djui-modern
+    attributes:
+      label: 是否启用 djui_modern
+      description: 配置项 `djui_modern`（现代化菜单 UI）。
+      options:
+        - 已启用
+        - 未启用
+        - 不清楚
+    validations:
+      required: true
+
+  - type: dropdown
+    id: cn-text-pack
+    attributes:
+      label: 中文字库开关状态（可选）
+      description: 编译期的 `CN_TEXT_PACK` 与游戏内「中文字库」开关的当前状态。文字类问题请务必填写。
+      options:
+        - 编译开启 + 游戏内开启
+        - 编译开启 + 游戏内关闭
+        - 编译关闭（CN_TEXT_PACK=false）
+        - 不清楚
+    validations:
+      required: false
+
+  # ── 五、日志（可选） ──────────────────────────────────────
+  - type: textarea
+    id: logs-paste
+    attributes:
+      label: 五、日志（可选）— 粘贴文本
+      description: 启动输出、崩溃栈、`sm64.log`、`adb logcat` 或 ASan 报告。日志很长就只贴报错前后几十行，完整文件走下面上传。
+      render: shell
+    validations:
+      required: false
+
+  - type: upload
+    id: logs-file
+    attributes:
+      label: 五、日志（可选）— 上传文件
+      description: 可直接把日志文件、抓包或整个日志目录的压缩包拖进来。
+    validations:
+      required: false
+      accept: ".log,.txt,.json,.zip,.gz,.tar.gz"
+
+  # ── 六、系统信息（可选） ──────────────────────────────────
+  - type: textarea
+    id: system-info
+    attributes:
+      label: 六、系统信息（可选）
+      description: 崩溃、卡顿、显示/图形相关的问题强烈建议填写。
+      value: |
+        - 操作系统与版本：
+        - CPU / GPU：
+        - 显卡驱动版本：
+        - 编译器 / 构建工具链（MSVC、GCC、clang、NDK 版本）：
+        - 其它（SDL 版本、真机或模拟器型号等）：
+    validations:
+      required: false
+
+  # ── 七、证据（可选） ──────────────────────────────────────
+  - type: upload
+    id: evidence-files
+    attributes:
+      label: 七、证据（可选）— 上传截图 / 录屏
+      description: 拖进来即可。能拍清错误文字、错位位置或崩溃瞬间那一帧就够。
+    validations:
+      required: false
+      accept: ".png,.jpg,.jpeg,.gif,.webp,.mp4,.mov,.webm"
+
+  - type: input
+    id: evidence-links
+    attributes:
+      label: 七、证据（可选）— 外部链接
+      description: 视频或大图请贴 B 站 / YouTube / 网盘等链接，多个链接用空格或换行分隔。
+      placeholder: https://www.bilibili.com/video/BV……
+    validations:
+      required: false
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+        提交后如果又发现新线索，直接在这个 Issue 里补充即可，不用重开。谢谢！
