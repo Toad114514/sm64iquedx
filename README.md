@@ -20,13 +20,13 @@ Super Mario 64 (Ch) (iQue) \[\!\]：`29047fba820695bd14c5bd7aa1aa4400`
 确认无误后将 ROM 放置在已经应用了 Ique Deluxe 的 sm64coopdx 程序根目录（或者放置在 User 目录也可）  
 如果操作无误，那么神游汉化资源功能将自动打开
 
-## 亮点
+## 特性
  - DJUI 前端（可开关）
  - 接近的一比一复刻
  - 标题画面汉化支持，加载此 Mod 可以让 Coopdx 显示标题画面
  - 可与 djui_modern 模块共存
  - 热切换，切换神游资源无需重启
- - 桌面/安卓同时支持
+ - 桌面/安卓 多平台支持
  - 支持生成特定系统的软件包
 
 ## 编译
@@ -37,6 +37,8 @@ cd ique-deluxe
 # 根据系统选择执行的文件
 sh ./install.sh             # For Linux/MacOS
 ./install.bat               # For Windows NT (目前没有)
+
+sh ./install.sh -h          # For Linux/MacOS 可用的参数选项
 ```
 
 这会先打开一个交互式的 TUI 界面询问构建产物需要：
@@ -68,9 +70,9 @@ sh ./install.sh             # For Linux/MacOS
 本仓库只存「改动」不存上游全量源码：
 
 - `src/` —— 被改过的文件，**路径与上游逐级一致**（唯一编辑源）
-- `patches/` —— 6 份补丁**平铺**在此，不建子目录：`0001` 主补丁、`0002` 可选前端、`0003` 语言字符串为四套上游共用，`0004` 汉化版 Android 语言、`0005`/`0006` 两个 Android 平台增量；另有 `cn_extra/` 存放上游不存在的新增文件。`lang/*.ini` 只加字符串、各上游上下文不同，已从主补丁里独立出来
+- `patches/` —— 4 份补丁**平铺**在此，不建子目录：`0001` 主补丁、`0002` 可选前端为四套上游共用，`0005`/`0006` 是两个 Android 平台增量；另有 `cn_extra/` 存放上游不存在的新增文件（只补缺、不覆盖）。语言字符串不是补丁，由 `scripts/add_lang_strings.sh` 在应用时按键插入
 - `platform/` ——  针对特殊平台的其他内容，例如 Debian 包所需的 control
-- `scripts/` —— 补丁生成脚本，以及幂等应用器 `apply_patches.sh`
+- `scripts/` —— 补丁生成脚本、语言字符串插入脚本 `add_lang_strings.sh`，以及幂等应用器 `apply_patches.sh`
 - `upstream.txt` —— 补丁基线（上游仓库 + commit）
 
 补丁索引与应用顺序见 [patches/README.md](patches/README.md)；改完 `src/` 用 `scripts/gen_all_patches.sh` 重生成共用补丁、`scripts/gen_platform_patches.py` 重生成 Android 补丁。不构建、只想手动叠加补丁时用 `scripts/apply_patches.sh <pc|android|android-cn> <上游目录> [--frontend]`，重复执行安全。约定详见 [docs/LAYOUT.md](docs/LAYOUT.md)。

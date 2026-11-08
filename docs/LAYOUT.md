@@ -6,8 +6,9 @@
 ```
 src/                  被修改过的文件，完整副本，路径与上游**逐级一致**（唯一编辑源）
 patches/NNNN-*.patch  **全部平铺在 patches/ 根目录，不建子目录**：
-                      0001 共用主补丁 / 0002 共用可选前端 / 0003 共用语言字符串
-                      0004 汉化版 Android 语言 / 0005、0006 两个 Android 平台增量
+                      0001 共用主补丁 / 0002 共用可选前端
+                      0005、0006 两个 Android 平台增量
+                      （语言字符串不是补丁，见 scripts/add_lang_strings.sh）
 patches/cn_extra/     上游根本不存在的新增文件，完整副本，路径与上游逐级一致
 platform/             特定平台/发行包的补丁与构建脚本
 scripts/              生成补丁的辅助脚本
@@ -46,37 +47,46 @@ sm64iquedx/src/Makefile                  ← 对应上游根目录 Makefile
 
 ## patches/cn_extra/
 
-上游不存在的文件以完整副本存放，内部路径仍然镜像上游根目录，方便 `install.sh` 整目录覆盖：
+上游不存在的文件以完整副本存放，内部路径仍然镜像上游根目录：
 
 ```
 patches/cn_extra/src/game/cn_font.c       → 上游 src/game/cn_font.c
 patches/cn_extra/src/game/cn_tex.c        → 上游 src/game/cn_tex.c
 patches/cn_extra/text/cn_dialogs_cn.inc.c → 上游 text/cn_dialogs_cn.inc.c
+patches/cn_extra/lang/Chinese.ini         → 上游 lang/Chinese.ini（PC 上游没有中文）
 ```
 
 - 不打成 `.patch`：新增文件通常是大体积字形表 / 生成产物，做文本 diff 没有意义，`git apply` 也容易因上下文漂移失败。
 - 里面既有手写源码，也有**工具生成产物**（`cn_data/*.h`、`cn_intro_data.c`、`text/cn_*.inc.c`）。生成产物改生成器后要重新同步，别手改。
-- 应用方式：`cp -R patches/cn_extra/. <上游根目录>/`，路径一一对应，天然幂等。
+- 应用方式是**逐文件补缺，不覆盖**：目标已存在就跳过（`apply_patches.sh` 里的 `copy_extras()`）。因为汉化版 Android 自带 `lang/Chinese.ini`，整目录 `cp -R` 会用 PC 那份把它顶掉。
 
 ## patches/NNNN-*.patch
 
 - 命名：`NNNN-短横线描述.patch`，四位数递增。**所有补丁平铺在 `patches/` 根目录**，不要为某个平台建子目录。
 - 一律 `git diff` 格式、相对上游根目录的路径（`a/src/...`）。
 - 必须能用 `patch -p1` 或 `git apply -p1` 在 `upstream.txt` 指定的基线上干净应用。
-- `0001`/`0002`/`0003` **由 `scripts/gen_all_patches.sh` 从 `src/` 一次生成**；`0004`/`0005`/`0006` 由 `scripts/gen_platform_patches.py` 生成。都不手工编写、不手工改。
+- `0001`/`0002` **由 `scripts/gen_all_patches.sh` 从 `src/` 一次生成**；`0005`/`0006` 由 `scripts/gen_platform_patches.py` 生成。都不手工编写、不手工改。
 - 应用前先 `git apply --check`；选了与声明不同的基线时可以跳过补丁、直接用 `src/` 覆盖终态。
-- **只有一份主补丁**：PC 与两个 Android 上游共用 `0001`/`0002`/`0003`，不要为 Android 再复制一整套。平台差异走 `0005`/`0006`，见下一节。
+- **只有一份主补丁**：PC 与两个 Android 上游共用 `0001`/`0002`，不要为 Android 再复制一整套。平台差异走 `0005`/`0006`，见下一节。
 
-## 语言字符串补丁：0003 / 0004
+## 语言字符串：脚本插入，不做补丁
 
-`lang/English.ini` / `lang/Chinese.ini` 的改动只是往 ini 里加字符串，但每套上游的 ini 行号、自带条目都不同（汉化版 Android 已自带 `Chinese = ...`），混进 `0001` 会让主补丁在汉化版 Android 上打不上。所以整个 `lang/` 前缀从 `0001` 里**排除**——由生成器自己筛掉，不靠应用器的 `--exclude`：
+`lang/*.ini` 只需要加两条字符串（`CHINESE_TEXT_PACK` 与语言列表里的 `Chinese`），但每套上游的 ini 行号与自带条目都不同（汉化版 Android 已自带 `Chinese = ...`）。给每个目标各生成一份 ini 补丁，补丁数量会随上游变多而膨胀，上游动一行还得全部重生成。
 
-| 补丁 | 生成自 | 适用 |
-| --- | --- | --- |
-| `0003-lang-strings.patch` | `src/lang/English.ini` 对 PC 基线 diff（加 2 行） | `pc` + `android` |
-| `0004-lang-android-cn.patch` | 汉化版 Android 自身的 English.ini / Chinese.ini 三方合并终态（各加 1 行） | `android-cn` |
+所以：**整个 `lang/` 前缀从 `0001` 里排除**（由生成器筛掉，不靠应用器 `--exclude`），字符串由 `scripts/add_lang_strings.sh` 在应用阶段按键插入。
 
-每个目标只应用其中一份。`0001` 与 `0005`/`0006` 都**不含任何 ini**，改语言字符串时只动这两份补丁。
+```bash
+scripts/add_lang_strings.sh <上游根目录> [--check]
+```
+
+| 行为 | 说明 |
+| --- | --- |
+| 键已存在 | 跳过（按 `^KEY[[:space:]]*=` 判断） |
+| 锚点存在 | 插在锚点行之后，段归属天然正确 |
+| 锚点缺失 | 报错退出，不猜位置 |
+| 处理范围 | 只处理 `lang/English.ini` 与 `lang/Chinese.ini`，其它语言文件原样保留 |
+
+改文案只改脚本里的两处常量，任何补丁都不用重生成。`--check` 只报告不写盘；对 PC 基线跑一次的结果与 `src/lang/English.ini` 逐字节一致。
 
 ## 平台增量补丁：0005 / 0006
 
@@ -103,7 +113,7 @@ scripts/apply_patches.sh <pc|android|android-cn> <上游干净 checkout> [--fron
 拆分边界是一条硬约束，别顺手扩大：
 
 - `src/pc/djui/djui_panel_confirm.[ch]` 留在 0001。它给原版面板加了一个 `djui_panel_confirm_create_ex()`（"否"按钮也能挂回调）。**注意**：首启确认框已经改成「检测到神游 ROM 就自动开启」（见 `src/pc/pc_main.c`），所以 `_ex` 目前**没有任何调用点**；保留它只为以后要恢复确认框时不用再改一遍。将来确定不要了，把这两个文件的改动一起删掉即可，不影响其它部分。
-- `lang/*.ini` 的字符串改动已独立成 `0003`/`0004`（见上节），`0001` 里完全没有语言文件。`CHINESE_TEXT_PACK` 即使不打 `0002` 也无害（只是多一个被 DLANG 引用的条目），所以语言补丁归在必选。
+- `lang/*.ini` 的字符串改动既不在 `0001` 里、也不做成补丁，由 `scripts/add_lang_strings.sh` 插入（见上节）。`CHINESE_TEXT_PACK` 即使不打 `0002` 也无害（只是多一个被 DLANG 引用的条目）。
 - 0002 对干净基线也能独立 `git apply -p1`（0001 不碰这个文件），没有顺序耦合。
 
 对应 `install.sh` 的 `--frontend`：选中才应用 0002。既然 0002 可选，**就不能用 `cp -R src/.` 覆盖终态**（那会无条件带上前端），要么只覆盖 0001 覆盖的文件，要么用「应用 0001 → 按需应用 0002 → 覆盖 cn_extra」的顺序。
@@ -112,9 +122,10 @@ scripts/apply_patches.sh <pc|android|android-cn> <上游干净 checkout> [--fron
 
 | 脚本 | 作用 |
 | --- | --- |
-| `apply_patches.sh <目标> <上游根目录> [--frontend]` | **应用器**，按目标选补丁、按序叠加、幂等；平时用它，别手写 `git apply --exclude` |
-| `gen_all_patches.sh <上游基线根目录>` | **改完 `src/` 后跑这个**，一次生成共用的 0001 / 0002 / 0003 并断言三段分工不重叠 |
-| `gen_platform_patches.py --pc-base … --android … --android-cn …` | 重生成 0004 / 0005 / 0006，内含三方合并、冲突消解与终态自检 |
+| `apply_patches.sh <目标> <上游根目录> [--frontend]` | **应用器**，按目标选补丁、按序叠加、补缺拷贝 `cn_extra/`、插语言字符串，幂等；平时用它，别手写 `git apply --exclude` |
+| `add_lang_strings.sh <上游根目录> [--check]` | 往 `lang/*.ini` 按键插入「中文字库」开关的两条字符串，四套上游共用，幂等 |
+| `gen_all_patches.sh <上游基线根目录>` | **改完 `src/` 后跑这个**，一次生成共用的 0001 / 0002 并断言分工 |
+| `gen_platform_patches.py --pc-base … --android … --android-cn …` | 重生成 0005 / 0006，内含三方合并、冲突消解与终态自检 |
 | `gen_patches.sh <上游根目录> [输出] [--only 前缀] [--exclude 前缀]` | 单个补丁生成器，按相对路径前缀筛选；`--only`/`--exclude` 可各重复多次（取并集） |
 
 `gen_patches.sh` 的行为约定（已覆盖测试）：内容相同的文件跳过；`src/` 里有而基线上没有的文件直接报错（应改放 `patches/cn_extra/`）；含 NUL 字节的二进制直接报错（`diff` 对二进制只回一句「文件不同」且退出码仍为 1，不自己判会把这句话写进补丁）；筛不出差异时写一个空补丁文件而不是保留旧文件，应用器遇到空补丁会跳过。
@@ -171,8 +182,8 @@ DESTDIR=/tmp/stage sh platform/freedesktop/install.sh <目录>   # 装进 stagin
 | --- | --- | --- |
 | 改上游已有文件（核心） | `src/`（路径一致） | 生成 `0001-src-overlay.patch`，`git apply -p1` |
 | 改上游已有文件（可选前端） | `src/`（路径一致） | 生成 `0002-djui-frontend.patch`，按 `--frontend` 决定要不要打 |
-| 改上游已有文件（语言字符串） | `src/`（路径一致） | 生成 `0003-lang-strings.patch`；汉化版 Android 的 ini 由 `0004` 单独生成 |
-| 上游没有的新文件 | `patches/cn_extra/`（路径一致） | 整目录拷贝到上游根 |
+| 改语言字符串 | `scripts/add_lang_strings.sh` 的常量 | 应用阶段按键插入，不生成补丁 |
+| 上游没有的新文件 | `patches/cn_extra/`（路径一致） | 逐文件补缺拷贝到上游根（已存在的跳过） |
 | Android 平台差异 | `scripts/gen_platform_patches.py` 三方合并 | 生成 `0005` / `0006`，`git apply -p1` |
 | 特定平台/发行包差异 | `platform/<name>/` | install.sh 按需调用 |
 
@@ -187,9 +198,9 @@ DESTDIR=/tmp/stage sh platform/freedesktop/install.sh <目录>   # 装进 stagin
 
 ## 现状（快照，以 git log 为准）
 
-- `src/` 27 个文件：Makefile、text/define_{courses,text}.inc.c、lang/English.ini、`src/game|menu|pc` 下 23 个（含 `rom_checker.h`）。
-- `patches/cn_extra/` 12 个上游不存在的文件：`cn_font`、`cn_tex`、`cn_data/*.h`、`cn_intro_data.c`、`text/cn_*.inc.c`、`src/pc/rom_checker_ique.cpp`；均已用 `git cat-file -e 8cd6e59:<path>` 确认上游不存在，且与实验工作区逐字节一致。
-- 6 份补丁**平铺**在 `patches/`：0001（25 文件，必选）、0002（1 文件，可选前端）、0003（1 文件，共用语言）、0004（2 文件，汉化版 Android 语言）、0005（4 文件，原版 Android 平台）、0006（4 文件，汉化版 Android 平台）。0001 不含任何 `lang/*.ini`。
-- 校验：`8cd6e59` + 0001 + 0003 + 0002 + `cn_extra/` 与 `src/` 27/27 逐字节一致；两个 Android 上游应用后与三方合并终态 28/29 文件逐字节一致；三套基线首次应用 + 幂等复跑均通过；`cn_extra` 12/12 一致，无冲突标记残留。
+- `src/` 26 个文件：Makefile、text/define_{courses,text}.inc.c、`src/game|menu|pc` 下 23 个（含 `rom_checker.h`）。**`lang/English.ini` 不在其中**：它的改动只有两条字符串，由 `scripts/add_lang_strings.sh` 在应用时插入，脚本对基线跑一次即得到与实验工作区逐字节相同的文件。
+- `patches/cn_extra/` 13 个上游不存在的文件：`cn_font`、`cn_tex`、`cn_data/*.h`、`cn_intro_data.c`、`text/cn_*.inc.c`、`src/pc/rom_checker_ique.cpp`、`lang/Chinese.ini`；均已用 `git cat-file -e 8cd6e59:<path>` 确认上游不存在，且与实验工作区逐字节一致。
+- 4 份补丁**平铺**在 `patches/`：0001（25 文件，必选）、0002（1 文件，可选前端）、0005（4 文件，原版 Android 平台）、0006（4 文件，汉化版 Android 平台）。0001 不含任何 `lang/*.ini`。
+- 校验：`8cd6e59` + 0001 + 0002 + `cn_extra/` + `add_lang_strings.sh` 与 `src/` 26/26 逐字节一致，`lang/English.ini` 与实验工作区一致；两个 Android 上游应用后与三方合并终态 27 文件逐字节一致；三套基线首次应用 + 幂等复跑均通过；`cn_extra` 13/13 一致，无冲突标记残留。
 - `platform/`：DEBIAN（`control.in` + `mkdeb.sh`）、pacman（`PKGBUILD` + `.install`）、freedesktop（`.desktop` + PNG 图标 + `install.sh`）。
-- 汉化版上游自带的 `lang/Chinese.ini`、`palettes/*.ini`、`src/pc/djui/*_glyphs.h`、`textures/custom_font/*.png` 属于所选上游本身，不在本仓库收录范围。
+- 汉化版上游自带的 `palettes/*.ini`、`src/pc/djui/*_glyphs.h`、`textures/custom_font/*.png` 属于所选上游本身，不在本仓库收录范围；它自带的 `lang/Chinese.ini` 也不会被 `cn_extra/` 覆盖（只补缺）。

@@ -3,14 +3,16 @@
 #
 #   scripts/apply_patches.sh <pc|android|android-cn> <上游根目录> [--frontend]
 #
-# 四套上游共用 0001 / 0002 / 0003 / cn_extra/；Android 额外需要
-# 0005 或 0006 平台补丁，汉化版 Android 的 ini 与其它上游不同，改用 0004。
+# 四套上游共用 0001 / 0002 / cn_extra/；Android 额外需要 0005 或 0006 平台补丁。
 #
-# lang/*.ini 的改动已从 0001 里彻底拿掉，所以 0001 在 Android 上只需要跳过
-# 3 个上下文漂移文件（该列表必须与 scripts/gen_platform_patches.py 的
-# EXCLUDED 一致，生成脚本会做一致性断言）。
+# lang/*.ini 的改动既不在 0001 里、也不做成补丁：各上游的 ini 行号与自带条目
+# 都不同，做成补丁每个上游一份，量太大也不好维护。改由
+# scripts/add_lang_strings.sh 按键插入（已存在则跳过），四套上游共用一份。
 #
-# 重复执行是安全的：已应用的补丁会被识别并跳过。
+# 0001 在 Android 上只需跳过 3 个上下文漂移文件（该列表必须与
+# scripts/gen_platform_patches.py 的 EXCLUDED 一致，生成脚本会做一致性断言）。
+#
+# 重复执行是安全的：已应用的补丁与已存在的字符串都会被识别并跳过。
 set -eu
 
 usage() {
@@ -45,8 +47,6 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 P="$root/patches"
 MAIN="$P/0001-src-overlay.patch"
 FRONT="$P/0002-djui-frontend.patch"
-LANG_PC="$P/0003-lang-strings.patch"
-LANG_CN="$P/0004-lang-android-cn.patch"
 PLAT_ANDROID="$P/0005-android.patch"
 PLAT_ANDROID_CN="$P/0006-android-cn.patch"
 
@@ -54,11 +54,9 @@ platform=""
 case "$target" in
     pc)
         set --
-        lang="$LANG_PC"
         ;;
     android)
         platform="$PLAT_ANDROID"
-        lang="$LANG_PC"
         set -- \
             --exclude=Makefile \
             --exclude=src/pc/configfile.c \
@@ -66,7 +64,6 @@ case "$target" in
         ;;
     android-cn)
         platform="$PLAT_ANDROID_CN"
-        lang="$LANG_CN"
         set -- \
             --exclude=Makefile \
             --exclude=src/pc/configfile.c \
@@ -75,7 +72,7 @@ case "$target" in
     *) echo "未知目标: $target" >&2; usage ;;
 esac
 
-for f in "$MAIN" "$FRONT" "$lang" "$P/cn_extra"; do
+for f in "$MAIN" "$FRONT" "$P/cn_extra"; do
     [ -e "$f" ] || { echo "缺少 $f" >&2; exit 1; }
 done
 if [ -n "$platform" ] && [ ! -f "$platform" ]; then
@@ -104,7 +101,6 @@ apply_patch() {
 
 echo "目标: $target  上游: $upstream"
 apply_patch "$MAIN" "$@"
-apply_patch "$lang"
 if [ -n "$platform" ]; then
     apply_patch "$platform"
 fi
@@ -112,6 +108,24 @@ if [ "$frontend" = yes ]; then
     apply_patch "$FRONT"
 fi
 
-cp -R "$P/cn_extra/." "$upstream/"
-echo "  覆盖 cn_extra/ 新增文件"
+# cn_extra/ 的语义是「上游不存在的新增文件」，所以只补缺、不覆盖：
+# 汉化版 Android 自带的 lang/Chinese.ini 必须原样留着，不能被 PC 那份顶掉。
+copy_extras() {
+    ( cd "$P/cn_extra" && find . -type f -print ) | sed 's|^\./||' | while IFS= read -r rel; do
+        if [ -e "$upstream/$rel" ]; then
+            echo "  保留上游已有的 $rel"
+            continue
+        fi
+        mkdir -p "$upstream/$(dirname "$rel")"
+        cp "$P/cn_extra/$rel" "$upstream/$rel"
+        echo "  新增 $rel"
+    done
+}
+
+copy_extras
+
+# 必须在 cn_extra 之后：PC 的 lang/Chinese.ini 就是 cn_extra 带过来的。
+echo "语言字符串:"
+sh "$root/scripts/add_lang_strings.sh" "$upstream"
+
 echo "完成。"

@@ -1,38 +1,47 @@
 # 补丁索引
 
-**所有补丁平铺在 `patches/` 根目录，不建子目录。** 四套上游共用前三份补丁与 `cn_extra/`，Android 只额外叠加一份平台增量，汉化版 Android 再换一份自己的语言补丁。
+**所有补丁平铺在 `patches/` 根目录，不建子目录。** 四套上游共用 `0001` / `0002` / `cn_extra/`；Android 只额外叠加一份平台增量。语言字符串**不是补丁**，由 `scripts/add_lang_strings.sh` 在应用阶段插入。
 
 | 补丁 | 文件数 | 适用目标 | 作用 |
 | --- | --- | --- | --- |
 | `0001-src-overlay.patch` | 25 | `pc` / `android` / `android-cn` 共用 | 必选，核心代码改动。**不含任何 `lang/*.ini`，也不含 DJUI 前端** |
 | `0002-djui-frontend.patch` | 1 | 三目标共用 | 可选，设置 → 其他 的「中文字库」开关 |
-| `0003-lang-strings.patch` | 1 | `pc` / `android` 共用 | 必选，`lang/English.ini` 加 2 条字符串 |
-| `0004-lang-android-cn.patch` | 2 | `android-cn` 专用 | 必选，`lang/English.ini` + `lang/Chinese.ini` 各加 1 条字符串 |
 | `0005-android.patch` | 4 | `android` 专用 | 必选，Android 平台增量 |
 | `0006-android-cn.patch` | 4 | `android-cn` 专用 | 必选，Android 平台增量 |
-| `cn_extra/` | 12 | 三目标共用 | 上游不存在的新增文件，整目录覆盖 |
+| `cn_extra/` | 13 | 三目标共用 | 上游不存在的新增文件，仅补缺、不覆盖 |
 
 四套上游与目标名的对应见仓库根 `upstream.txt`；`pc` 同时覆盖原版 CoopDX 与上善若的 PC 汉化版。
 
-## 为什么语言字符串要独立、且主补丁要避开
+## 语言字符串为什么不用补丁
 
-`lang/English.ini` / `lang/Chinese.ini` 的改动**只是往 ini 里加字符串**：
+要加的其实只有两条：
 
 ```
-CHINESE_TEXT_PACK = "Chinese Text Pack (iQue)"   # DISABLE_POPUPS 之后
-Chinese = "Chinese (中文)"                       # 语言列表末尾
-CHINESE_TEXT_PACK = "中文字库（神游）"              # 汉化版 Chinese.ini
+CHINESE_TEXT_PACK = "..."    # [MISC] 段，紧跟 DISABLE_POPUPS
+Chinese = "..."              # [LANGUAGE] 段，紧跟 Spanish
 ```
 
-但每套上游的 ini 都不一样：PC 基线 456 行、原版 Android 468 行、汉化版 Android 457 行且**自带 `Chinese = ...` 条目**（再加一次就重复）。行号和 hunk 上下文都会漂移，混在 `0001` 里会让主补丁在汉化版 Android 上直接打不上。
+但每套上游的 ini 都不同：PC 基线 456 行、原版 Android 468 行、汉化版 Android 457 行且**自带 `Chinese = ...`**（再加一次就重复）。给每个目标生成一份 ini 补丁，就要维护 3 份内容几乎相同、行号和上下文各不相同的 diff，上游动一行还得全部重生成。
 
-因此整个 `lang/` 前缀从 `0001` 里排除，由生成器自己保证（不是靠应用器 `--exclude`）：
+所以改成**按键插入**，一份脚本服务四套上游：
 
-- `0003` 是对 **PC 基线** 的 diff，加 2 行。`pc` 与 `android` 都能干净应用（原版 Android 虽多 12 行，但两处 hunk 的上下文一致，`git apply` 会按内容定位）。
-- `0004` 只服务 `android-cn`：`English.ini` 只加 `CHINESE_TEXT_PACK`（`Chinese` 已有）、`Chinese.ini` 加中文文案。二者都是对该上游自身 ini 的 diff。
-- 三个目标各自只应用其中**一份**语言补丁，不会叠加。
+```bash
+scripts/add_lang_strings.sh <上游根目录> [--check]
+```
 
-> 这两行即使不打可选的 `0002` 也无害（只是多/少一个被 DLANG 引用的条目），所以语言补丁归在必选。
+| 行为 | 说明 |
+| --- | --- |
+| 已存在该键 | 跳过（按 `^KEY[[:space:]]*=` 判断，不看行号） |
+| 锚点存在 | 插在锚点行之后，因此段归属天然正确 |
+| 锚点缺失 | **报错退出**，不猜位置 |
+| 只处理 | `lang/English.ini` 与 `lang/Chinese.ini`；其它语言文件按上游原样保留 |
+| 文案 | `English.ini` → `CHINESE_TEXT_PACK = "Chinese Text Pack (iQue)"`、`Chinese = "Chinese (中文)"`；`Chinese.ini` → `CHINESE_TEXT_PACK = "中文字库（神游）"`、`Chinese = "中文"` |
+
+`--check` 只报告待插入条目、不写盘，用于校验；重复执行始终安全（已插入的键全部跳过）。对 PC 基线跑一次的结果与实验工作区 `lang/English.ini` **逐字节一致**，所以 `src/` 里不再放这个文件——字符串只有一个来源，就是脚本。
+
+`0001` 因此把整个 `lang/` 前缀排除掉（由生成器保证，不靠应用器的 `--exclude`）：这样主补丁在四套上游上都不碰 ini，语言相关的东西只有这一处。
+
+> 这两条字符串即使不打可选的 `0002` 也无害（只是多/少一个被 DLANG 引用的条目）。
 
 ## 平台增量补丁
 
@@ -68,11 +77,22 @@ theirs = 本仓库 src/（PC 终态）
 
 `src/pc/configfile.h` 和 `src/pc/lua/utils/smlua_misc_utils.c` 在两个 Android 上游与 PC 基线内容不同，但 `0001` 的 hunk 上下文没被破坏，能直接应用。应用后它们等于「Android 上游 + PC 改动」，与 PC 终态不完全相同是**预期**的；已验证 `0001` 新增的 10 行在这两个文件里一行不缺（含 `cn_tex_gauge_dy()`）。
 
-汉化版 Android 自带的 `palettes/*.ini`、`src/pc/djui/*_glyphs.h`、`textures/custom_font/*.png` 属于上游本身，补丁不改动、也不收录；`cn_extra/` 里没有 `lang/Chinese.ini`，覆盖新增文件时不会把上游这份冲掉。
+汉化版 Android 自带的 `palettes/*.ini`、`src/pc/djui/*_glyphs.h`、`textures/custom_font/*.png` 属于上游本身，补丁不改动、也不收录。
+
+## cn_extra/ 是「新增文件」，只补缺不覆盖
+
+`cn_extra/` 收录 13 个上游不存在的文件，其中包括 **`lang/Chinese.ini`**（PC 上游 `lang/` 只有 11 种语言，没有中文；汉化版 Android 则有自己的一份）。因此应用时逐个文件判断：目标已存在就跳过，只补缺。
+
+```bash
+# scripts/apply_patches.sh 内部语义
+[ -e "$target/$rel" ] && 保留上游已有的 $rel || 复制
+```
+
+这条不是多余的保险：汉化版 Android 自带的 `lang/Chinese.ini` 与 PC 那份内容并不完全相同（它有自己的触屏相关条目），整目录 `cp -R` 会把它顶掉。已用哨兵内容实测：应用后上游内容保留，只在 `DISABLE_POPUPS` 后多出一行。原版 Android 上游没有 `lang/Chinese.ini`，于是直接拿到 PC 那份——它的触屏相关字符串会回落到英文，这是可接受的取舍。
 
 ## 应用
 
-统一走应用器，重复执行安全（已应用的补丁会被识别并跳过）：
+统一走应用器，重复执行安全（已应用的补丁会被识别并跳过，已存在的字符串也跳过）：
 
 ```bash
 scripts/apply_patches.sh <pc|android|android-cn> <上游干净 checkout> [--frontend]
@@ -82,25 +102,27 @@ scripts/apply_patches.sh <pc|android|android-cn> <上游干净 checkout> [--fron
 
 | 目标 | 顺序 |
 | --- | --- |
-| `pc` | `0001` → `0003` → [`0002`] → `cn_extra/` |
-| `android` | `0001`（跳过 3 个漂移文件）→ `0003` → `0005` → [`0002`] → `cn_extra/` |
-| `android-cn` | `0001`（跳过 3 个漂移文件）→ `0004` → `0006` → [`0002`] → `cn_extra/` |
+| `pc` | `0001` → [`0002`] → `cn_extra/`（补缺）→ `add_lang_strings.sh` |
+| `android` | `0001`（跳过 3 个漂移文件）→ `0005` → [`0002`] → `cn_extra/`（补缺）→ `add_lang_strings.sh` |
+| `android-cn` | `0001`（跳过 3 个漂移文件）→ `0006` → [`0002`] → `cn_extra/`（补缺）→ `add_lang_strings.sh` |
 
-`[]` 表示仅 `--frontend` 时应用。**不要**用 `cp -R src/.` 覆盖终态——那会无条件带上前端，也会把 Android 的平台差异冲掉。
+`[]` 表示仅 `--frontend` 时应用。语言脚本**必须放在 `cn_extra/` 之后**：PC 的 `lang/Chinese.ini` 就是 `cn_extra/` 带过来的。**不要**用 `cp -R src/.` 覆盖终态——那会无条件带上前端，也会把 Android 的平台差异冲掉。
 
 排除列表同时存在于 `scripts/gen_platform_patches.py` 的 `EXCLUDED` 和 `scripts/apply_patches.sh`，生成脚本会断言两者完全一致，**改一处必须改另一处**。
 
 ## 重新生成
 
 ```bash
-# 1. 改动 src/ 后，重生成共用的 0001 / 0002 / 0003
+# 1. 改动 src/ 后，重生成共用的 0001 / 0002
 sh scripts/gen_all_patches.sh <PC 8cd6e59 基线目录>
 
-# 2. 重生成 0004 / 0005 / 0006（Android 上游 checkout 见 upstream.txt）
+# 2. 重生成 0005 / 0006（Android 上游 checkout 见 upstream.txt）
 python3 scripts/gen_platform_patches.py \
     --pc-base    <PC 8cd6e59 基线目录> \
     --android    <ManIsCat2 上游目录> \
     --android-cn <汉化版 Android 上游目录>
 ```
 
-第 1 步会断言三段补丁互不重叠、且 `0001` 里没有 `lang/` 和前端文件。第 2 步自检：`0001` + 语言补丁 + 平台补丁 + `0002` 叠加后与三方合并终态逐字节一致（`android` 28 文件 / `android-cn` 29 文件），不应用 `0002` 时前端文件保持上游原版，平台补丁与 `0001`、语言补丁互不重叠。
+第 1 步会断言 `0001` 里既没有前端文件也没有 `lang/`，`0002` 只含那一个前端文件。第 2 步自检：`0001`（跳过 3 个漂移文件）+ 平台补丁 + `0002` + `add_lang_strings.sh` 叠加后与三方合并终态逐字节一致（`android` 28 文件 / `android-cn` 28 文件），语言字符串齐全，语言脚本复跑无改动（幂等），不应用 `0002` 时前端文件保持上游原版，平台补丁与 `0001` 不重叠。
+
+语言字符串改了文案时不用重生成任何补丁，只改 `scripts/add_lang_strings.sh` 里的两处常量。

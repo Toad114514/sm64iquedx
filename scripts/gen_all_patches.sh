@@ -1,10 +1,15 @@
 #!/bin/sh
-# 一次生成三份「四套上游共用」的补丁。改了 src/ 后跑这个，不要单独手改 patches/*.patch。
+# 一次生成两份「四套上游共用」的补丁。改了 src/ 后跑这个，不要单独手改 patches/*.patch。
 #
 #   scripts/gen_all_patches.sh <上游基线根目录>
 #
 # 上游根目录 = upstream.txt 声明的 commit 的干净 checkout（也可用
 # `git worktree add /path/to/base <commit>` 得到一个）。
+#
+# 语言字符串（CHINESE_TEXT_PACK / 语言列表里的 Chinese 条目）不生成补丁：
+# 各上游的 lang/*.ini 行号与自带条目都不同，做成补丁就是每个上游一份。改由
+# scripts/add_lang_strings.sh 在应用阶段按键插入，这里只负责把 lang/ 从
+# 0001 里排除掉。
 set -eu
 
 if [ $# -lt 1 ]; then
@@ -23,26 +28,26 @@ P="$root/patches"
 # （首启确认框已改成按神游 ROM 自动判定），保留只是为了以后恢复确认框时省事。
 FRONTEND=src/pc/djui/djui_panel_misc.c
 
-# 语言文件只是往 ini 里加字符串（CHINESE_TEXT_PACK / Chinese 语言条目），
-# 各上游的 ini 行号与自带条目不同，混进主补丁会让主补丁在 Android 上打不上。
-# 因此整个 lang/ 前缀独立成 0003，0001 自己就避开它，不靠应用器 --exclude。
+# lang/ 整个前缀不进任何补丁，由 scripts/add_lang_strings.sh 在应用时插入。
 LANG_PREFIX=lang/
 
 MAIN="$P/0001-src-overlay.patch"
 FRONT_PATCH="$P/0002-djui-frontend.patch"
-LANG_PATCH="$P/0003-lang-strings.patch"
 
 sh "$gen" "$upstream" "$MAIN" --exclude "$FRONTEND" --exclude "$LANG_PREFIX"
 sh "$gen" "$upstream" "$FRONT_PATCH" --only "$FRONTEND"
-sh "$gen" "$upstream" "$LANG_PATCH" --only "$LANG_PREFIX"
 
-# ---- 分工断言：三段互不重叠，且各自只含该含的文件 ----
+# ---- 分工断言：两段互不重叠，且各自只含该含的文件 ----
 if grep -q "^--- a/$FRONTEND$" "$MAIN"; then
     echo "错误: 0001 里仍含前端文件 $FRONTEND" >&2
     exit 1
 fi
 if grep -q '^--- a/lang/' "$MAIN"; then
-    echo "错误: 0001 里仍含 lang/*.ini，语言字符串应走 0003" >&2
+    echo "错误: 0001 里仍含 lang/*.ini，语言字符串应交给 add_lang_strings.sh" >&2
+    exit 1
+fi
+if grep -q '^--- a/lang/' "$FRONT_PATCH"; then
+    echo "错误: 0002 里混入了 lang/*.ini" >&2
     exit 1
 fi
 n=$(grep -c '^--- a/' "$FRONT_PATCH" || true)
@@ -50,12 +55,4 @@ if [ "$n" -ne 1 ] || ! grep -q "^--- a/$FRONTEND$" "$FRONT_PATCH"; then
     echo "错误: 0002 应只含 $FRONTEND，实际含 $n 个文件" >&2
     exit 1
 fi
-if grep '^--- a/' "$LANG_PATCH" | grep -qv '^--- a/lang/'; then
-    echo "错误: 0003 里混入了非 lang/ 文件" >&2
-    exit 1
-fi
-if grep -q "^--- a/$FRONTEND$" "$LANG_PATCH"; then
-    echo "错误: 0003 里含前端文件，与 0002 重叠" >&2
-    exit 1
-fi
-echo "✅ 0001 核心 / 0002 前端 / 0003 语言字符串分工正确" >&2
+echo "✅ 0001 核心 / 0002 前端分工正确；语言字符串由脚本插入" >&2
