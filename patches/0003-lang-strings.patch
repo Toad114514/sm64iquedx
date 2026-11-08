@@ -1,0 +1,18 @@
+--- a/lang/English.ini
++++ b/lang/English.ini
+@@ -332,6 +332,7 @@
+ MISC_TITLE = "MISC"
+ PAUSE_IN_SINGLEPLAYER = "Pause In Singleplayer"
+ DISABLE_POPUPS = "Disable Popups"
++CHINESE_TEXT_PACK = "Chinese Text Pack (iQue)"
+ USE_STANDARD_KEY_BINDINGS_CHAT = "Classic Chatbox Controls"
+ MENU_OPTIONS = "Menu Options"
+ INFORMATION = "Info"
+@@ -438,6 +439,7 @@
+ Portuguese = "Portuguese (Português)"
+ Russian = "Russian (Русский)"
+ Spanish = "Spanish (Español)"
++Chinese = "Chinese (中文)"
+ 
+ [LOBBIES]
+ PUBLIC_LOBBIES = "PUBLIC LOBBIES"
