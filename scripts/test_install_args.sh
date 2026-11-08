@@ -63,17 +63,21 @@ expect_die() {
 
 say_section() { printf '\n== %s\n' "$*"; }
 
+# 上游地址不写死：这里的目的是验证「哪个开关选哪个上游」，不是校验 URL 内容。
+# 写死过一次 cn-repo 的地址，upstream.txt 改了拼写之后自测就假失败。
+uv() { sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$repo/upstream.txt" | head -n 1 | tr -d '\r'; }
+
 say_section "A. 参数解析（--print-config）"
 expect_var "无参数默认"        ""                             TARGET       pc
 expect_var "无参数默认"        ""                             ASK_PACKAGE  ""
-expect_var "无参数默认"        ""                             VERSION      "$(sed -n 's/^version[[:space:]]*=[[:space:]]*//p' "$repo/upstream.txt")"
-expect_var "PC 原版"           "-f"                           UP_URL       https://github.com/coop-deluxe/sm64coopdx
-expect_var "PC 汉化"           "-c"                           UP_URL       https://github.com/Shangshanruo66/sm64coopdx-Chinese
+expect_var "无参数默认"        ""                             VERSION      "$(uv version)"
+expect_var "PC 原版"           "-f"                           UP_URL       "$(uv repo)"
+expect_var "PC 汉化"           "-c"                           UP_URL       "$(uv cn-repo)"
 expect_var "PC 汉化 TARGET"    "-c"                           TARGET       pc
 expect_var "Android 原版"      "-a"                           TARGET       android
 expect_var "Android 原版"      "-a"                           ASK_PACKAGE  no
 expect_var "Android 汉化"      "-a -c"                        TARGET       android-cn
-expect_var "Android 汉化 URL"  "-a -c"                        UP_URL       https://github.com/Shangshanruo666/sm64coopdx-Chinese-Android
+expect_var "Android 汉化 URL"  "-a -c"                        UP_URL       "$(uv android-cn-repo)"
 expect_var "前端补丁"          "-f -n"                        ASK_FRONTEND yes
 expect_var "djui_modern 长选项" "--djui-modern"               ASK_DJUI     yes
 expect_var "djui_modern 短选项" "-d"                          ASK_DJUI     yes
