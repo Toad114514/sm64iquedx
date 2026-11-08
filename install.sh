@@ -2,7 +2,6 @@
 
 # tools/传参 不传参则使用 read 询问
 
-
 welcome_ask() {
     read -p "是否只编译 Android 版本？(需要 Android NDK/Gradle 依赖) [y/n]：" ASK_ANDROID # y/n
     read -p "使用汉化版的上游？(Shangshanruo666/sm64coopdx-Chinese) [y/n]：" ASK_CHINESE # y/n
@@ -74,7 +73,7 @@ start_comp() {
 }
 
 usage() {
-    
+
 }
 
 main() {
