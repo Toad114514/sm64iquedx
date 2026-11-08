@@ -92,7 +92,7 @@ sh install.sh -po -p all --path build-iquedx/upstream        # 只打包
 - `.github/workflows/build-desktop.yml` —— Linux / Windows / macOS 三平台，默认参数 `-c -f -d`。Linux 编译完后再用 `-po -p all` 出 `.deb` / `.rpm`（没有 `makepkg` 就跳过 Arch 包），产物按平台上传为 artifact。
 - `.github/workflows/build-android.yml` —— 默认参数 `-a -c -f -d`，装 SDK 33 + build-tools 33.0.2，跑完 `make TOUCH_CONTROLS=1` 再 `gradlew assembleRelease`，用上游自带证书签名后上传 APK。
 
-两个 workflow 都会先跑 `scripts/test_install_args.sh`(45 项，离线) 当门禁。
+两个 workflow 都会先跑 `scripts/test_install_args.sh`(47 项，离线) 当门禁。
 
 也可以 fork 后用 GitHub Actions 自己编译，或到上善若的汉化群 https://qm.qq.com/q/twjhRVjgWs 找我要成品 *（为控制国内马里奥圈小鬼数量不直接发布）*。
 
