@@ -1,11 +1,46 @@
-pkgname="sm64coopdx-iquedx"
-pkgver="v1.5.1"
-pkgrel="1"
+# Arch Linux 打包脚本。
+#
+# 用法（在仓库根目录构建完之后）：
+#   cd platform/pacman && makepkg -si
+#
+# 本 PKGBUILD 不自己编译：install.sh 已经把上游 + 补丁 + cn_extra 组装好并构建成
+# 成品目录 dist/，这里只负责把它按 Arch 的目录规范装进 /opt，并附带启动器与图标。
+# 因此 source=() 为空、sha256sums=() 也为空 —— 没有需要下载校验的源码。
 
-pkgdesc="带 IQue Rom 汉化支持的 Super Mario 64 Co-op Deluxe"
+pkgname=sm64coopdx-iquedx
+pkgver=1.5.1
+pkgrel=1
+pkgdesc="带神游（iQue）简体中文文本包的 Super Mario 64 Co-op Deluxe"
+arch=('x86_64' 'aarch64')
+url="https://github.com/toad114514/ique-deluxe"
+license=('MIT')
+depends=('sdl2' 'libglvnd' 'zlib' 'curl' 'gcc-libs')
+options=('!strip')
+install=sm64coopdx-iquedx.install
+source=()
+sha256sums=()
 
-arch=('x86_64', 'amd64', 'aarch64')
-source="https://github.com/toad114514/sm64iquedx"
-license=("MIT License")
+package() {
+    local repo dist
+    repo=$(cd "$startdir/../.." && pwd)
+    dist="$repo/dist"
 
-sha256sums=('SKIP')
+    if [[ ! -x "$dist/sm64coopdx" ]]; then
+        error "找不到构建产物：$dist/sm64coopdx"
+        plain "先用 install.sh 构建，或把成品目录放到仓库根的 dist/ 下再打包。"
+        exit 1
+    fi
+
+    install -d "$pkgdir/opt/$pkgname"
+    cp -a "$dist/." "$pkgdir/opt/$pkgname/"
+
+    install -d "$pkgdir/usr/share/applications"
+    # desktop 文件里的 Exec 默认就指向 /opt/$pkgname/sm64coopdx；
+    # 这里再 sed 一遍，避免以后改默认路径时静默漂移。
+    sed "s|^Exec=.*|Exec=/opt/$pkgname/sm64coopdx|" \
+        "$repo/platform/freedesktop/$pkgname.desktop" \
+        > "$pkgdir/usr/share/applications/$pkgname.desktop"
+
+    install -Dm644 "$repo/platform/freedesktop/$pkgname.png" \
+        "$pkgdir/usr/share/icons/hicolor/256x256/apps/$pkgname.png"
+}
