@@ -80,7 +80,7 @@ install -m 644 "$repo/platform/freedesktop/sm64coopdx-iquedx.png" \
     "$pkg/usr/share/icons/hicolor/256x256/apps/sm64coopdx-iquedx.png"
 
 out=$repo/sm64coopdx-iquedx_${version}_${arch}.deb
-echo "架构：$arch　成品目录：$dist　输出：$out"
+echo "架构：${arch}　成品目录：${dist}　输出：${out}"
 # --root-owner-group 是 dpkg 1.19 才有的；老一点的 dpkg-deb 不认这个参数，
 # 会直接退 2（看着像「打包脚本坏了」）。有就用，没有就退到普通 --build。
 if dpkg-deb --help 2>&1 | grep -q -- '--root-owner-group'; then
