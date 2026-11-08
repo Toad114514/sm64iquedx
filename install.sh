@@ -416,6 +416,15 @@ collect_dist() {
        && [ ! -f "$DIST_DIR/sm64coopdx.arm" ]; then
         die "成品目录里没有主程序，构建可能失败了（看上面的编译输出）"
     fi
+
+    # aarch64 上上游 Makefile 把主程序叫 sm64coopdx.arm（TARGET_RPI / TARGET_RK3588
+    # 分支：`EXE := $(BUILD_DIR)/sm64coopdx.arm`），而启动器（.desktop 的 Exec）、
+    # platform/*/mk*.sh 都按 sm64coopdx 找它 ⇒ 不改名的话 aarch64 打包直接
+    # 「找不到构建产物」失败。二进制叫什么都能跑，所以改名，别留 97MB 副本。
+    if [ ! -f "$DIST_DIR/sm64coopdx" ] && [ -f "$DIST_DIR/sm64coopdx.arm" ]; then
+        mv "$DIST_DIR/sm64coopdx.arm" "$DIST_DIR/sm64coopdx"
+        info "主程序 sm64coopdx.arm → sm64coopdx（aarch64 上游命名）"
+    fi
 }
 
 collect_apk() {

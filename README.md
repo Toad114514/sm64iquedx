@@ -103,7 +103,7 @@ sh install.sh -po -p all --path build-iquedx/upstream        # 只打包
 - Intel Mac 的 runner 只到 2027 年秋（GitHub 说届时停止支持 x86_64 macOS），那之后这一腿要删掉。
 - `.github/workflows/build-android.yml` —— 默认参数 `-a -c -f -d`，装 SDK 33 + build-tools 33.0.2，跑完 `make TOUCH_CONTROLS=1` 再 `gradlew assembleRelease`，用上游自带证书签名后上传 APK。
 
-两个 workflow 都会先跑 `scripts/test_install_args.sh`(52 项，离线) 当门禁。
+两个 workflow 都会先跑 `scripts/test_install_args.sh`(53 项，离线) 当门禁。
 自测不依赖宿主机的打包工具（`dpkg-deb` / `rpmbuild` / `makepkg` 都有桩），所以三平台结果一致。
 
 也可以 fork 后用 GitHub Actions 自己编译，或到上善若的汉化群 https://qm.qq.com/q/twjhRVjgWs 找我要成品 *（为控制国内马里奥圈小鬼数量不直接发布）*。

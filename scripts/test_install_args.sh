@@ -371,6 +371,19 @@ printf '%s\n' "$zout" | grep -q "9.9.9-[a-z]*-$(uname -m)-portable.zip" \
     && ok "便携 zip：文件名带架构（$(uname -m)）" \
     || no "便携 zip：文件名不对 → $(printf '%s\n' "$zout" | tail -n 1)"
 
+# C12: aarch64 上游把主程序叫 sm64coopdx.arm，收集成品时必须改名成 sm64coopdx
+#      —— 否则 platform/*/mk*.sh 一律报「找不到构建产物」，CI 上 aarch64 就是
+#      这么挂的（-po 的文案显示它找到了 .arm，紧接着打包说没有 sm64coopdx）。
+mkdir -p "$C/up-arm/build/us_pc/lang"
+printf 'stub\n' > "$C/up-arm/build/us_pc/sm64coopdx.arm"
+chmod +x "$C/up-arm/build/us_pc/sm64coopdx.arm"
+out=$(run_tree -po -p no --path "$C/up-arm" --dist "$C/dist-arm")
+if [ -x "$C/dist-arm/sm64coopdx" ] && [ ! -e "$C/dist-arm/sm64coopdx.arm" ]; then
+    ok "aarch64：sm64coopdx.arm 收集时改名成 sm64coopdx"
+else
+    no "aarch64：改名失败 → $(ls "$C/dist-arm" 2>/dev/null | tr '\n' ' ')"
+fi
+
 say_section "D. 可移植性静态检查"
 
 # D1: `$var` 紧贴非 ASCII 字符时必须写成 `${var}`。
