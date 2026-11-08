@@ -1,0 +1,43 @@
+# —— ROM / 受版权保护的原始数据，永不入库 ——
+*.z64
+*.n64
+*.v64
+*.rom
+baserom*
+!*.sha1
+
+# —— 构建产物 ——
+build/
+build-*/
+out/
+dist/
+*.o
+*.obj
+*.d
+*.a
+*.so
+*.dylib
+*.exe
+*.elf
+*.map
+
+# —— 打补丁残留 ——
+*.rej
+*.orig
+*.porig
+*.patch.bak
+
+# —— 本地下载/缓存 ——
+.cache/
+downloads/
+tmp/
+__pycache__/
+*.pyc
+
+# —— 编辑器 / 系统 ——
+.vscode/
+.idea/
+*.swp
+*.code-workspace
+*.DS_Store
+Thumbs.db

@@ -1,0 +1,10 @@
+# 补丁基线（唯一权威来源）
+#
+# 所有 patches/ 与 modules/**/patch.patch 都必须能在下列基线上干净应用。
+# 升级基线 = 一次单独的 commit，只改这个文件 + 重新生成全部补丁。
+
+repo   = https://github.com/deluxe-team/sm64coopdx
+commit =
+# 备选基线（汉化整合版，模块需同时兼容两套）
+alt-repo   = https://github.com/Shangshanruo66958/sm64coopdx-Chinese
+alt-commit =

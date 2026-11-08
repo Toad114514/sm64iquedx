@@ -1,0 +1,10 @@
+* text=auto
+
+# 补丁必须按字节原样保存，禁止任何换行/空白转换
+*.patch -text
+*.diff  -text
+patches/** -text
+
+# 脚本在 Windows 上也应保持 LF
+*.sh    text eol=lf
+*.bat   text eol=crlf
