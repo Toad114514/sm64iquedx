@@ -39,6 +39,14 @@ sm64iquedx/src/Makefile                  ← 对应上游根目录 Makefile
 - 含二进制文件时改用 `git diff --binary`。
 - **由 `scripts/gen_patches.sh` 从 `src/` 生成**，不手工编写、不手工改。
 
+## scripts/
+
+| 脚本 | 作用 |
+| --- | --- |
+| `gen_patches.sh <上游根目录> [输出]` | 遍历 `src/`，对基线逐文件 diff，生成 `patches/0001-src-overlay.patch` |
+
+`gen_patches.sh` 的行为约定（已覆盖测试）：内容相同的文件跳过；`src/` 里有而基线上没有的文件直接报错（应改放 `modules/<name>/files/`）；含 NUL 字节的二进制直接报错（`diff` 对二进制只回一句「文件不同」且退出码仍为 1，不自己判会把这句话写进补丁）。
+
 ## modules/
 
 每个模块一个目录，约定三个可选入口：

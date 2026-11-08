@@ -38,3 +38,15 @@ sh ./install.sh             # For Linux/MacOS
 
 你也可以将仓库 fork 后使用 Github Action 自己编译
 或上善若的汉化群 https://qm.qq.com/q/twjhRVjgWs 直接获取编译成品
+
+## 仓库结构
+
+本仓库只存「改动」不存上游全量源码：
+
+- `src/` —— 被改过的文件，**完整副本，路径与上游逐级一致**（唯一编辑源）
+- `patches/` —— 由 `src/` 对基线 diff 出来的补丁，按序应用，不手写
+- `modules/` —— 可独立开关的模块（新增文件 / 额外钩子）
+- `scripts/gen_patches.sh` —— 从 `src/` 生成补丁
+- `upstream.txt` —— 补丁基线（上游仓库 + commit）
+
+约定详见 [docs/LAYOUT.md](docs/LAYOUT.md)。
