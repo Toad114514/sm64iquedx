@@ -9,12 +9,13 @@ welcome_ask() {
     read -p "是否应用 djui_modern 补丁？[y/n]：" ASK_DJUI # y/n
 
     if [[ $ASK_ANDROID = "n" ]]; then
-        read -p "要构建软件包吗？[auto/deb/arch]：" ASK_PACKAGE
+        read -p "要构建软件包吗？[auto/deb/arch/rpm/mac/other/no]：" ASK_PACKAGE
     fi
 }
 
 # djui modern Patch
 djui_modern_apply() {
+    echo "[!] 克隆 djui_modern 仓库..."
     git clone https://github.com/Shangshanruo666/djui_modern --depth 1 djui_modern
     FLAG="--root upstream"
     if [[ $ASK_ANDROID = "y" ]]; then
@@ -22,12 +23,11 @@ djui_modern_apply() {
     fi
 
     echo "[!] 应用 djui_modern 补丁..."
-    sh ./djui_modern/install $FLAG
+    sh ./djui_modern/install "$FLAG"
 }
 
 # 本体 Patch
 ique_patch_apply() {
-    
 }
 
 ## 两个不同平台的初处理
@@ -73,7 +73,7 @@ start_comp() {
 }
 
 usage() {
-
+    echo -e "占位符"
 }
 
 main() {
@@ -82,6 +82,7 @@ main() {
     ASK_DJUI=""
     ASK_FRONTEND=""
     ASK_PACKAGE=""
+    CUSTOM_INSTALL_PATH=""
 
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -90,6 +91,7 @@ main() {
             --frontend|-f) ASK_FRONTEND="y"; shift;;
             --package|-p) ASK_PACKAGE="$2"; shift;;
             --chinese|-c) ASK_CHINESE="y"; shift;;
+            --path|-p) CUSTOM_INSTALL_PATH="$2"; shift;;
             --help|-h) usage; exit 0;;
             -*)
                 echo "未知的参数：$1 (-h)"
