@@ -591,6 +591,11 @@ void print_generic_ascii_string(s16 x, s16 y, const char* ascii) {
 #define MAX_STRING_WIDTH 16
 #endif
 
+// Line advance for a CN newline token. CN cells are CN_GLYPH_H (16) tall and
+// are drawn upwards from the cursor, so this has to be taller than 16 or
+// consecutive lines touch. The iQue build advances 18 for exactly this reason.
+#define CN_LINE_STEP (CN_GLYPH_H + 2)
+
 /**
  * Prints a generic white string.
  * In JP/EU a IA1 texture is used but in US a IA4 texture is used.
@@ -633,6 +638,22 @@ void print_generic_string(s16 x, s16 y, const u8 *str) {
 #ifdef VERSION_EU
             yCoord += 16;
             xCoord = x;
+            lineNum++;
+#else
+            // Same re-anchor the vanilla 0xFE case does below: on non-EU the
+            // cursor is the modelview matrix, so a newline has to pop the
+            // current line and push a fresh one a line lower. Without this the
+            // CN newline was simply swallowed and a whole multi-line CN string
+            // (e.g. Peach's letter, DIALOG_020) ran off the right edge.
+            //
+            // The CN step is 18px, not MAX_STRING_WIDTH (16): a CN cell is
+            // CN_GLYPH_H (16) tall and is drawn *upwards* from the cursor, so
+            // 16 would butt each line against the one above it. 18 is what the
+            // iQue build uses for its own newline (VERSION_CN's
+            // MAX_STRING_WIDTH in n64decomp-cn src/game/ingame_menu.c).
+            gSPPopMatrix(gDisplayListHead++, G_MTX_MODELVIEW);
+            create_dl_translation_matrix(MENU_MTX_PUSH, x, y - (lineNum * CN_LINE_STEP), 0.0f);
+            lineNum++;
 #endif
             strPos += cnTok.length;
             continue;
