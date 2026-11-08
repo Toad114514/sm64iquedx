@@ -3,7 +3,6 @@ description: 汉化补丁（sm64iquedx）相关的崩溃、乱码、显示错位
 title: "[Bug] "
 labels: ["bug"]
 assignees: ["Toad114514"]
-type: Bug
 body:
   - type: markdown
     attributes:
@@ -150,14 +149,14 @@ body:
     validations:
       required: false
 
-  - type: upload
+  - type: textarea
     id: logs-file
     attributes:
       label: 五、日志（可选）— 上传文件
-      description: 可直接把日志文件、抓包或整个日志目录的压缩包拖进来。
+      description: 把日志文件、抓包或整个日志目录的压缩包**直接拖进这个输入框**（或点击框内后选择文件），GitHub 会自动作为附件上传。
+      placeholder: 拖入文件即可
     validations:
       required: false
-      accept: ".log,.txt,.json,.zip,.gz,.tar.gz"
 
   # ── 六、系统信息（可选） ──────────────────────────────────
   - type: textarea
@@ -175,14 +174,14 @@ body:
       required: false
 
   # ── 七、证据（可选） ──────────────────────────────────────
-  - type: upload
+  - type: textarea
     id: evidence-files
     attributes:
       label: 七、证据（可选）— 截图 or 录屏
-      description: 拖进来即可。能拍清错误文字、错位位置或崩溃瞬间那一帧就够。
+      description: 图片/视频**直接拖进这个输入框**即可上传（GitHub 会自动生成链接）。能拍清错误文字、错位位置或崩溃瞬间那一帧就够；文件太大就贴外链到下一栏。
+      placeholder: 拖入截图 / 录屏即可
     validations:
       required: false
-      accept: ".png,.jpg,.jpeg,.gif,.webp,.mp4,.mov,.webm"
 
   - type: input
     id: evidence-links
