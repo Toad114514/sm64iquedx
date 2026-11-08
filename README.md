@@ -1,6 +1,14 @@
-# sm64-IqueDeluxe
-适用于 Super Mario 64 Co-op Deluxe 的《神游马力欧64》ROM 汉化资源兼容补丁，接近的一比一复刻
-**一张图片**
+<center>
+
+# sm64-iQueDeluxe
+
+**适用于 Super Mario 64 Co-op Deluxe 的《神游马力欧64》ROM 汉化资源兼容补丁**
+
+<img src="./screenshot/title.png" width="800"/>
+
+
+
+</center>
 
 ## 使用
 你必须拥有一个合法的《神游马力欧64》的 z64 decomp 副本，本仓库不包含 Rom。  
@@ -9,9 +17,10 @@ Super Mario 64 (Ch) (iQue) \[\!\]：`29047fba820695bd14c5bd7aa1aa4400`
 如果操作无误，那么神游汉化资源功能将自动打开
 
 ## 亮点
- - 高度 DJUI 前端（可开关）
+ - DJUI 前端（可开关）
  - 接近的一比一复刻
- - 标题画面也汉化了，加载此 Mod 可以让 Coopdx 显示标题画面
+ - 标题画面汉化支持，加载此 Mod 可以让 Coopdx 显示标题画面
+ - 可与 djui_modern 模块共存
  - 热切换，切换神游资源无需重启
 
 ## 编译
