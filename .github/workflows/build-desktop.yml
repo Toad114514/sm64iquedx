@@ -57,7 +57,7 @@ jobs:
               # 新容器第一次用 pacman 必须先建 keyring，否则包签名校验直接失败
               pacman-key --init >/dev/null
               pacman-key --populate archlinux >/dev/null
-              pacman -Sy --noconfirm --needed base-devel >/dev/null
+              pacman -Sy --noconfirm --needed base-devel git >/dev/null
               # makepkg 拒绝 root
               useradd -m builder
               chown -R builder /w
