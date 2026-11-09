@@ -487,6 +487,20 @@ else
     printf '%s\n' "$bad" | sed 's/^/        /'
 fi
 
+# D2: awk 的 /regex/ 字面量里不能出现「方括号包斜杠」——用来表达「斜杠」的字符类。
+# BSD awk（macOS 的 /usr/bin/awk 就是 one-true-awk）的正则词法器 regexpr() 是
+# 逐字节扫到第一个 `/` 就收尾、**完全不识别方括号**的，于是 `...(/[/])/` 这种写法
+# 会把正则从中间截断，报 `awk: nonterminated character class ...`（rc=2）。
+# gawk / mawk 都会正确跳过方括号里的斜杠 ⇒ 本地永远测不出来，只能静态守。
+# 要判「行首是不是斜杠」就写 substr($0, 1, 1) != "/"。
+awkhit=$(cd "$repo" && grep -lF '[/]' scripts/*.sh install.sh 2>/dev/null \
+            | grep -v 'test_install_args.sh' || true)
+if [ -z "$awkhit" ]; then
+    ok "awk 正则里没有「方括号包斜杠」（macOS 的 awk 会截断正则）"
+else
+    no "awk 正则里出现「方括号包斜杠」（macOS 的 awk 会当正则提前结束）：$awkhit"
+fi
+
 say_section "结果"
 printf '  通过 %d，失败 %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1

@@ -96,9 +96,27 @@ if ! awk -v g_file="$f_decl" -v e_file="$f_ent" \
         close(f)
         return s
     }
-    { lines[NR] = $0 }
-    index($0, g_anchor) && $0 !~ /^[[:space:]]*(extern|[/])/ && g_at == 0 { g_at = NR }
-    index($0, e_anchor) && e_at == 0 { e_at = NR }
+    # 去行首空白用 substr 循环，**不要写成正则**。
+    # BSD awk（macOS 的 /usr/bin/awk，one-true-awk）的 /regex/ 词法器 `regexpr()`
+    # 是逐字节扫到第一个斜杠就收尾、根本不识别方括号的，所以「方括号里放一个斜杠」
+    # 的写法（用来排除以注释开头的行）会当场把正则截断，报
+    # `awk: nonterminated character class ...`；gawk / mawk 都正确处理方括号，
+    # 本地永远测不出来。
+    function trimlead(s,   c) {
+        while (length(s) > 0) {
+            c = substr(s, 1, 1)
+            if (c != " " && c != "\t" && c != "\r") break
+            s = substr(s, 2)
+        }
+        return s
+    }
+    {
+        lines[NR] = $0
+        t = trimlead($0)
+        # 排除 `extern ...` 声明行和注释行：整行出现锚点、且行首不是 extern 或斜杠
+        if (g_at == 0 && index($0, g_anchor) > 0 && index(t, "extern") != 1 && substr(t, 1, 1) != "/") { g_at = NR }
+        if (e_at == 0 && index($0, e_anchor) > 0) { e_at = NR }
+    }
     END {
         # 锚点只以 extern/注释形式出现时前面 grep 是过得去的，这里不能静默跳过
         if (want_g == "no" && g_at == 0) { print "add_cn_config: 锚点无效（只有 extern/注释行）：" g_anchor > "/dev/stderr"; exit 3 }
