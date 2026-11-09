@@ -15,7 +15,10 @@
 </div>
 
 ## 简介
-这是一个用于在 Super Ma
+这是一个用于在 Super Mario 64 Co-op Deluxe 下使用《神游马力欧64》汉化资源的补丁   
+皆在将《神游马力欧64》的汉化完全一比一搬入 sm64coopdx  
+彻底解决妈妈再也不怕我看不懂原版的马力欧64剧情啦aaa  
+**注意：项目并不是将神游版的所有特性直接一比一复刻！非汉化的部分例如特性、纹理、模型和地图等都与美版 SM64 Rom 相同！**   
 
 ## 使用
 你必须拥有一个合法的《神游马力欧64》的 z64 decomp 副本，本仓库不包含 Rom。  
@@ -54,7 +57,7 @@ sh ./install.sh -a -c                     # 只构建 Android 汉化版 APK
 | 参数 | 作用 |
 | --- | --- |
 | `-a, --android` | 只构建 Android APK（需要 NDK + Gradle），优先级高于 `--package` |
-| `-c, --chinese` | 使用 `上善若和梅塔的长名字` 制作的汉化版上游仓库 `sm64coopdx-Chinese` 和 `sm64coopdx-Chinese-Android` |
+| `-c, --chinese` | 使用 `上善若&梅塔的长名字` 制作的汉化版上游仓库 `sm64coopdx-Chinese` 或 `sm64coopdx-Chinese-Android` |
 | `-f, --frontend` | 应用 `patches/0002-djui-frontend.patch`，在 设置 → 其他 里添加简易开关；不应用时只能改配置文件 |
 | `-d, --djmd` | 应用 [djui_modern](https://github.com/Shangshanruo666/djui_modern) 模块 |
 | `-p, --package <方式>` | 将 dist/ 内容打包成软件包或 portable 压缩包 |
