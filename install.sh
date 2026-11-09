@@ -329,29 +329,36 @@ build_android() {
     info "$a_make TOUCH_CONTROLS=1 -j${a_jobs}（生成资源）"
     ( cd "$a_up" && $a_make TOUCH_CONTROLS=1 -j"$a_jobs" )
 
-    # Gradle 工程根目录：上游现在把工程放在 platform/（platform/build.gradle 里
-    # 声明 AGP 版本），根目录只有一份没有 buildscript 的 settings.gradle。
-    # 顺序按「有 wrapper 用 wrapper」→「用手上的 gradle」→「按 build.gradle 位置猜」。
-    a_task=:app:assembleRelease
+    # Gradle 工程根目录与任务名。
+    # 任务**不带** :project: 前缀：不带路径时 Gradle 会在所有含该任务的子项目里
+    # 执行。上游把 Android 工程挂在 :platform:app，写死 :app:assembleRelease
+    # 会直接「project 'app' not found」（CI 上就是这么挂的，42 秒）。
+    a_task=assembleRelease
+    a_dir=
+    a_gradle=
 
-    if [ -x "$a_up/platform/gradlew" ]; then
-        a_dir="$a_up/platform"
+    if [ -x "$a_up/gradlew" ]; then
+        a_dir=$a_up
         a_gradle=./gradlew
-    elif [ -x "$a_up/gradlew" ] && [ -f "$a_up/build.gradle" ]; then
-        a_dir="$a_up"
+    elif [ -x "$a_up/platform/gradlew" ]; then
+        a_dir=$a_up/platform
         a_gradle=./gradlew
-        a_task=:platform:app:assembleRelease
-    elif [ -f "$a_up/platform/build.gradle" ]; then
-        a_dir="$a_up/platform"
+    elif [ -f "$a_up/settings.gradle" ] || [ -f "$a_up/settings.gradle.kts" ] \
+         || [ -f "$a_up/build.gradle" ] || [ -f "$a_up/build.gradle.kts" ] \
+         || [ -f "$a_up/platform/build.gradle" ]; then
+        # 没有 wrapper：用系统 gradle。注意**根目录**才是工程根（platform/ 下面
+        # 没有 settings.gradle 时，Gradle 会向上找到根的那份，rootProject 仍是
+        # sm64coopdx），所以有根 settings/build 就优先在根跑。
         command -v gradle >/dev/null 2>&1 || die "需要 gradle（上游没有 wrapper）：请装 Gradle 或 Android Studio"
         a_gradle=gradle
-    elif [ -f "$a_up/build.gradle" ]; then
-        a_dir="$a_up"
-        command -v gradle >/dev/null 2>&1 || die "需要 gradle（上游没有 wrapper）：请装 Gradle 或 Android Studio"
-        a_gradle=gradle
-        a_task=:platform:app:assembleRelease
+        if [ -f "$a_up/settings.gradle" ] || [ -f "$a_up/settings.gradle.kts" ] \
+           || [ -f "$a_up/build.gradle" ] || [ -f "$a_up/build.gradle.kts" ]; then
+            a_dir=$a_up
+        else
+            a_dir=$a_up/platform
+        fi
     else
-        die "找不到 Gradle 工程（既没有 gradlew 也没有 platform/build.gradle）"
+        die "找不到 Gradle 工程（既没有 gradlew，也没有 settings.gradle / build.gradle）"
     fi
 
     info "工程目录 $a_dir"
