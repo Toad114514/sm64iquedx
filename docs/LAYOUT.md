@@ -223,14 +223,17 @@ DESTDIR=/tmp/stage sh platform/freedesktop/install.sh <目录>   # 装进 stagin
 
 ## GitHub Actions
 
-两条独立流水线，都不碰 `platform/` 以外的额外约定：
+只有一条流水线 `build.yml`，五个 job 覆盖桌面两平台 × 两架构 + Android：
 
-| workflow | 默认参数 | 说明 |
+| job | 默认参数 | 说明 |
 | --- | --- | --- |
-| `build-desktop.yml` | `-c -f -d` | Linux / Windows / macOS 三个 job。Linux 先 `-p no` 只编译，再用 `install.sh -po -p all --path build-iquedx/upstream` 出 `.deb` / `.rpm`（`makepkg` 不存在就跳过 Arch 包），产物按平台上传 artifact |
-| `build-android.yml` | `-a -c -f -d` | ubuntu + SDK 33 / build-tools 33.0.2；`install.sh` 内部先 `make TOUCH_CONTROLS=1` 生成资源再 `gradlew assembleRelease`，之后用上游自带 `platform/android/{key.pk8,certificate.pem}` 签名并上传 |
+| `linux`（`ubuntu-22.04`） | `-c -f -d` | x86_64。先 `-p no` 只编译，再用 `install.sh -po -p all --path build-iquedx/upstream` 出 `.deb` / `.rpm` / 便携 zip；Arch 包进 `archlinux:latest` 容器跑 `makepkg` |
+| `linux-arm`（`ubuntu-22.04-arm`） | `-c -f -d` | aarch64，只出 `.deb` / pacman / 便携 zip（不装 rpm，`-p all` 会跳过并警告）；Arch 包进 `menci/archlinuxarm:base-devel`（官方 archlinux 镜像只有 x86_64） |
+| `windows`（`windows-latest`） | `-c -f -d` | MSYS2 mingw64，只出便携 zip |
+| `macos`（矩阵：`macos-latest` / `macos-15-intel`） | `-c -f -d` | arm64 与 x86_64 各出一份 dmg + 便携 zip；编译后多一步「`.app` 不能链回 brew」的自包含检查 |
+| `android`（`ubuntu-22.04`） | `-a -c -f -d` | SDK 33 / build-tools 33.0.2；`install.sh` 内部先 `make TOUCH_CONTROLS=1` 生成资源再 `gradle assembleRelease`，之后用上游自带 `platform/android/{key.pk8,certificate.pem}` 签名并上传 |
 
-两个 workflow 第一步都是 `sh scripts/test_install_args.sh`，参数表一改就红，避免 CI 里才发现选项没接上。
+每个 job 第一步都是 `sh scripts/test_install_args.sh`，参数表一改就红，避免 CI 里才发现选项没接上。五个 job 共用一个 concurrency 组（`build-<ref>`），push 一次只跑一套，新 push 会把旧的一起取消。
 
 **为什么拆成两次 `install.sh`**：GitHub 的 job 之间不共享工作区，只有 artifact。`-po/--package-only` 就是给「第二个 job 只有产物」准备的：跳过克隆/补丁/编译，直接吃 `--path` 指到的已编译树；没产物一律 `exit 255`（与打包出错的 1 区分）。
 
