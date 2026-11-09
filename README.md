@@ -22,9 +22,9 @@ Super Mario 64 (Ch) (iQue) \[\!\]：`29047fba820695bd14c5bd7aa1aa4400`
 
 ## 特性
  - 简易的 djui 前端开关
- - 接近的一比一复刻
- - 标题画面汉化支持，加载此 Mod 可以让 Coopdx 显示标题画面
- - 可与 djui_modern 模块共存
+ - 接近一比一复刻《神游马力欧64》
+ - 标题画面汉化支持，启用 [Vanilla SM64 Title Screen](https://mods.sm64coopdx.com/mods/vanilla-sm64-title-screen.1287/) 可以让 Coopdx 显示标题画面
+ - 可与 [djui_modern](https://github.com/Shangshanruo666/djui_modern) 模块共存
  - 热切换，切换神游资源无需重启
  - 桌面/安卓 多平台支持
  - 支持生成特定系统的软件包
@@ -35,11 +35,11 @@ Super Mario 64 (Ch) (iQue) \[\!\]：`29047fba820695bd14c5bd7aa1aa4400`
 git clone https://github.com/toad114514/sm64iquedx --depth 1
 cd sm64iquedx
 
-# 不带参数 = 交互式向导（需要终端）
+# 不带参数会询问编译选项
 sh ./install.sh
 
-# 也可以直接用参数，不再提问
-sh ./install.sh -h                        # 看全部选项
+# 也可以直接用参数
+sh ./install.sh -h                        # 列出全部选项
 sh ./install.sh -f -p deb                 # 带前端开关，生成 .deb
 sh ./install.sh -c -f -p rpm              # 汉化上游 + 前端 + .rpm
 sh ./install.sh -d -f -p mac              # 带 djui_modern，出 .app / .dmg
@@ -52,30 +52,25 @@ sh ./install.sh -a -c                     # 只构建 Android 汉化版 APK
 | --- | --- |
 | `-a, --android` | 只构建 Android APK（需要 NDK + Gradle），优先级高于 `--package` |
 | `-c, --chinese` | 使用 `上善若和梅塔的长名字` 制作的汉化版上游仓库 `sm64coopdx-Chinese` 和 `sm64coopdx-Chinese-Android` |
-| `-f, --frontend` | 应用 `patches/0002-djui-frontend.patch`，在 设置 → 其他 里加开关；不应用时只能改配置文件 |
+| `-f, --frontend` | 应用 `patches/0002-djui-frontend.patch`，在 设置 → 其他 里添加简易开关；不应用时只能改配置文件 |
 | `-d, --djmd` | 应用 [djui_modern](https://github.com/Shangshanruo666/djui_modern) 模块 |
 | `-p, --package <方式>` | 将 dist/ 内容打包成软件包或 portable 压缩包 |
-| `-po, --package-only` | 只用 `--path` 指向的已编译树打包；缺产物时 exit 255 |
-| `-o, --path <目录>` | 上游 checkout 位置，默认 `build-iquedx/upstream` |
-| `--dist <目录>` | 成品目录，默认 `dist/`（arch 打包写死读 `dist/`） |
-| `-V, --version <版本>` | 包版本号，默认读 `upstream.txt` 的 `version` |
-| `-n, --print-config` | 只解析参数并打印最终配置，不克隆/不编译；核对参数是否传对 |
 
-根据情况可以打包成以下不同的软件包：
+`--package` 可根据情况打包成以下不同的软件包：
 
 - Debian 系 → 生成 `sm64coopdx-iquedx_<版本>_<架构>.deb` 并使用 `apt install` 安装
 - Arch 系 → 生成 `sm64coopdx-iquedx-<版本>-<rel>-<架构>.pkg.tar.zst`
   - 本来想提交到 AUR 的，最近不给注册开放，所以目前还不能 `yay -S sm64coopdx-iquedx`
 - 红帽系 / openSUSE → 生成 `sm64coopdx-iquedx-<版本>-<rel>.<架构>.rpm`
 - macOS → 生成 `SM64CoopDeluxe.app`，默认再包一层 `.dmg`
-- 其他 Linux / Unix → `--package other` 只提示安装命令，本体一律装在 `/opt/sm64coopdx-iquedx`
+- 其他 Linux / Unix → `--package other` 只提示安装命令，本体默认存储在 `/opt/sm64coopdx-iquedx`
 
-Windows 目前仅有 make，打包为向导安装程序目前没有做
+Windows 目前仅有 Portable，打包为向导安装程序目前没有做
 
 也可以 fork 后用 GitHub Actions 自己编译，或到上善若的汉化群 https://qm.qq.com/q/twjhRVjgWs 找我要成品 *（为控制国内马里奥圈小鬼数量不直接发布）*。
 
 ## 提交 Issue
-请使用 Github 的模板表单！否则任何 issue 一律忽略！
+请使用 Github 的模板表单！否则任何 Bug Issue 一律忽略！
 
 ## 仓库结构
 
