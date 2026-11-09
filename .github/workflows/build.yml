@@ -10,10 +10,17 @@ name: Build
 #             + macos-15-intel     x86_64  → dmg / portable-zip
 #   android     ubuntu-22.04       arm64-v8a / x86_64 → apk
 #
-# 桌面统一流程：sh install.sh -c -f -d -p no  →  sh install.sh -po -p all  → 上传。
-#   -c 汉化上游  -f 前端补丁  -d djui_modern
+# 桌面统一流程：sh install.sh ${IQDX_BUILD_ARGS} -p no  →  sh install.sh -po -p all  → 上传。
+#   编译选项由 workflow_dispatch 的输入拼出来（见下面 on / env）：
+#     上游      汉化版(-c) | 原版（无 -c）
+#     UIPatch   开启(-f)   | 关闭
+#     djui_modern 开启(-d) | 关闭
+#   push / PR 触发时三个输入不存在，走默认「汉化版 + 前端 + djui_modern」，
+#   与加这些选项之前的行为完全一致。
 #   -p no   只编译，不打任何格式的包
 #   -po     只打包（跳过克隆/补丁/编译，直接吃上一步留下的 build-iquedx/upstream）
+#
+# ⚠️ 产物名（artifact）不含变体标记：下载前先看 run 的「编译选项」日志行。
 #
 # 产物按格式拆成独立 artifact（不要一个几百 MB 的 zip 里套 dist/），名字里带架构，
 # 因为同一个系统的两种架构会产出同名文件。
@@ -22,6 +29,22 @@ name: Build
 
 on:
   workflow_dispatch:
+    inputs:
+      upstream:
+        description: '上游仓库'
+        type: choice
+        default: 汉化版
+        options:
+          - 汉化版
+          - 原版
+      frontend:
+        description: '应用 UIPatch 前端补丁（0002：设置 → 其他 → 神游汉化）'
+        type: boolean
+        default: true
+      djui_modern:
+        description: '应用 djui_modern 界面模块'
+        type: boolean
+        default: true
   push:
     branches: [main]
     paths-ignore: ['**.md', 'docs/**']
@@ -30,6 +53,23 @@ on:
 concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
+
+# ── 编译选项（所有 job 共用）─────────────────────────────────────────────────
+# 为什么用 github.event.inputs 而不是 inputs.*：
+#   1) workflow_dispatch 的输入在 push/PR 下根本不存在，`|| 默认值` 才能兜底；
+#   2) event.inputs 的值**永远是字符串**，不会踩 boolean 的 falsy 陷阱——
+#      `false` 在 `a && b || c` 里是假值，`'false'` 才是真值。
+# 为什么真分支写非空串（'-c'）而不是空串：
+#   `cond && '' || '-c'` 在 cond 为真时 `true && ''` 得到空串（假值），会被 `||`
+#   吃掉，结果永远返回 '-c'。所以只能是「条件真 → 非空串」这个方向。
+env:
+  IQDX_CHINESE: ${{ github.event.inputs.upstream || '汉化版' }}
+  IQDX_FRONTEND: ${{ github.event.inputs.frontend || 'true' }}
+  IQDX_DJUI: ${{ github.event.inputs.djui_modern || 'true' }}
+  IQDX_BUILD_ARGS: >-
+    ${{ (github.event.inputs.upstream || '汉化版') == '汉化版' && '-c' || '' }}
+    ${{ (github.event.inputs.frontend || 'true') == 'true' && '-f' || '' }}
+    ${{ (github.event.inputs.djui_modern || 'true') == 'true' && '-d' || '' }}
 
 jobs:
   # ── Linux x86_64 ────────────────────────────────────────────────────────────
@@ -44,15 +84,24 @@ jobs:
           sudo apt-get update
           # rpm 提供 rpmbuild；只给 -po -p all 的 rpm 分支用
           sudo apt-get install -y --no-install-recommends \
-            build-essential git python3 zip \
+            build-essential git python3 python3-yaml zip \
             libglew-dev libsdl2-dev libz-dev libcurl4-openssl-dev \
             rpm
 
       - name: 参数自测（离线）
         run: sh scripts/test_install_args.sh
 
+      # 编译选项是 workflow_dispatch 的输入拼出来的，这里按 GitHub 表达式的语义
+      # 把 7 种组合重新求值一遍（boolean 的 false 是假值、真分支不能写空串，
+      # 这两个坑改一行就可能踩回去）。缺 PyYAML 会自己跳过，不会把 job 弄红。
+      - name: 校验 workflow 编译选项（离线）
+        run: python3 scripts/check_workflow_inputs.py
+
       - name: 编译
-        run: sh install.sh -c -f -d -p no
+        run: |
+          echo "编译选项：${IQDX_BUILD_ARGS:-（无：原版 + 不带可选模块）}"
+          echo "  上游=$IQDX_CHINESE  前端=$IQDX_FRONTEND  djui_modern=$IQDX_DJUI"
+          sh install.sh ${IQDX_BUILD_ARGS} -p no
 
       - name: 打包（只用已有构建产物）
         run: sh install.sh -po -p all --path build-iquedx/upstream
@@ -140,7 +189,10 @@ jobs:
         run: sh scripts/test_install_args.sh
 
       - name: 编译
-        run: sh install.sh -c -f -d -p no
+        run: |
+          echo "编译选项：${IQDX_BUILD_ARGS:-（无：原版 + 不带可选模块）}"
+          echo "  上游=$IQDX_CHINESE  前端=$IQDX_FRONTEND  djui_modern=$IQDX_DJUI"
+          sh install.sh ${IQDX_BUILD_ARGS} -p no
 
       # aarch64 拆成两步打：坏在 deb 还是 zip，一眼就看出来。
       # （`-p all` 在 Linux 上会一次跑 deb/rpm/arch/zip，出错只剩一个 exit code）
@@ -233,7 +285,10 @@ jobs:
         run: sh scripts/test_install_args.sh
 
       - name: 编译
-        run: sh install.sh -c -f -d -p no
+        run: |
+          echo "编译选项：${IQDX_BUILD_ARGS:-（无：原版 + 不带可选模块）}"
+          echo "  上游=$IQDX_CHINESE  前端=$IQDX_FRONTEND  djui_modern=$IQDX_DJUI"
+          sh install.sh ${IQDX_BUILD_ARGS} -p no
 
       - name: 打包（Windows 不出安装包，只整理成品目录）
         run: sh install.sh -po -p all --path build-iquedx/upstream
@@ -282,7 +337,10 @@ jobs:
         env:
           # Intel runner 的 brew 前缀是 /usr/local，两个都放上，别写死 /opt/homebrew
           PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig
-        run: sh install.sh -c -f -d -p no
+        run: |
+          echo "编译选项：${IQDX_BUILD_ARGS:-（无：原版 + 不带可选模块）}"
+          echo "  上游=$IQDX_CHINESE  前端=$IQDX_FRONTEND  djui_modern=$IQDX_DJUI"
+          sh install.sh ${IQDX_BUILD_ARGS} -p no
 
       - name: 检查 .app 自包含（不能链回 brew）
         run: |
@@ -374,7 +432,10 @@ jobs:
 
       # install.sh 内部顺序：make TOUCH_CONTROLS=1（生成资源）→ gradle assembleRelease → 收集 APK。
       - name: 编译 APK
-        run: sh install.sh -a -c -f -d -p no
+        run: |
+          echo "编译选项：${IQDX_BUILD_ARGS:-（无：原版 + 不带可选模块）}"
+          echo "  上游=$IQDX_CHINESE  前端=$IQDX_FRONTEND  djui_modern=$IQDX_DJUI"
+          sh install.sh -a ${IQDX_BUILD_ARGS} -p no
 
       - name: 签名（用上游自带的测试证书）
         run: |

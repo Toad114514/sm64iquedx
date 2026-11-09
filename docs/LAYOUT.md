@@ -234,13 +234,23 @@ DESTDIR=/tmp/stage sh platform/freedesktop/install.sh <目录>   # 装进 stagin
 
 只有一条流水线 `build.yml`，五个 job 覆盖桌面两平台 × 两架构 + Android：
 
-| job | 默认参数 | 说明 |
+| job | 默认编译选项 | 说明 |
 | --- | --- | --- |
 | `linux`（`ubuntu-22.04`） | `-c -f -d` | x86_64。先 `-p no` 只编译，再用 `install.sh -po -p all --path build-iquedx/upstream` 出 `.deb` / `.rpm` / 便携 zip；Arch 包进 `archlinux:latest` 容器跑 `makepkg` |
 | `linux-arm`（`ubuntu-22.04-arm`） | `-c -f -d` | aarch64，只出 `.deb` / pacman / 便携 zip（不装 rpm，`-p all` 会跳过并警告）；Arch 包进 `menci/archlinuxarm:base-devel`（官方 archlinux 镜像只有 x86_64） |
 | `windows`（`windows-latest`） | `-c -f -d` | MSYS2 mingw64，只出便携 zip |
 | `macos`（矩阵：`macos-latest` / `macos-15-intel`） | `-c -f -d` | arm64 与 x86_64 各出一份 dmg + 便携 zip；编译后多一步「`.app` 不能链回 brew」的自包含检查 |
 | `android`（`ubuntu-22.04`） | `-a -c -f -d` | SDK 33 / build-tools 33.0.2；`install.sh` 内部先 `make TOUCH_CONTROLS=1` 生成资源再 `gradle assembleRelease`，之后用上游自带 `platform/android/{key.pk8,certificate.pem}` 签名并上传 |
+
+「默认编译选项」这一列只在 push / PR 触发时成立。手动触发（`workflow_dispatch`）时三个输入会改写它：
+
+| 输入 | 取值 | 作用 |
+| --- | --- | --- |
+| `upstream` | 汉化版 / 原版 | 汉化版 → `-c`（PC 用 `cn-repo`，Android 用 `android-cn-repo`）；原版不带 |
+| `frontend` | 勾选（默认开） | `-f` → 额外应用 `0002`，「设置 → 其他」里出现中文字库开关 |
+| `djui_modern` | 勾选（默认开） | `-d` → 应用 djui_modern 模块（在 `0001` 之前） |
+
+拼装逻辑在 `build.yml` 的顶层 `env.IQDX_BUILD_ARGS`，五个 job 共用同一份结果；`scripts/check_workflow_inputs.py` 按 GitHub 表达式的语义把 7 种组合重新求值（boolean 的 `false` 是假值、真分支不能写空串，这两个坑改一行就可能踩回去）。产物名（artifact）不带变体标记，下载前看 run 里「编译选项」那行日志。
 
 每个 job 第一步都是 `sh scripts/test_install_args.sh`，参数表一改就红，避免 CI 里才发现选项没接上。五个 job 共用一个 concurrency 组（`build-<ref>`），push 一次只跑一套，新 push 会把旧的一起取消。
 
