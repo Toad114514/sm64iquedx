@@ -396,6 +396,39 @@ fi
 
 # C13: add_cn_config.sh —— configfile.c 的中文配置项从「每上游一份补丁」改成了
 #      插入脚本（旧的 0006 因此删掉），这里守住「插的位置对、且幂等、锚点缺失会报错」。
+#
+# ⚠️ 三处调用统一走一个 awk 包装壳，按 **mawk** 的规则拒绝「-v 的值含裸换行」。
+# 起因：脚本原来用 `awk -v g="$GLOBALS"` 传要插入的多行文本，gawk 照收，
+# Ubuntu 的 /bin/awk（mawk）直接 `awk: newline in string ...` + 退出码 2，
+# 于是 CI 上「插入位置不对（rc=2）」。本机是 gawk，不带这层壳就永远测不出来。
+REAL_AWK=$(command -v awk || echo /usr/bin/awk)
+mkdir -p "$C/mawkish"
+cat > "$C/mawkish/awk" <<'SHIM'
+#!/bin/sh
+prev=
+for a in "$@"; do
+    if [ "$prev" = v ]; then
+        case $a in
+            *'
+'*) printf 'awk: newline in string %s at source line 1\n' "$a" >&2; exit 2 ;;
+        esac
+    fi
+    case $a in
+        -v) prev=v ;;
+        -v?*)
+            case $a in
+                *'
+'*) printf 'awk: newline in string %s at source line 1\n' "$a" >&2; exit 2 ;;
+            esac
+            prev= ;;
+        *) prev= ;;
+    esac
+done
+exec "$REAL_AWK" "$@"
+SHIM
+chmod +x "$C/mawkish/awk"
+cfg_run() { REAL_AWK="$REAL_AWK" PATH="$C/mawkish:$PATH" sh "$repo/scripts/add_cn_config.sh" "$@"; }
+
 cfg=$C/cfgprobe
 mkdir -p "$cfg/src/pc"
 cat > "$cfg/src/pc/configfile.c" <<'CFG'
@@ -407,7 +440,7 @@ static const ConfigEntry table[] = {
 CFG
 cp "$cfg/src/pc/configfile.c" "$C/cfgprobe.orig"
 
-cfg_rc_a=0; sh "$repo/scripts/add_cn_config.sh" "$cfg" >/dev/null 2>&1 || cfg_rc_a=$?
+cfg_rc_a=0; cfg_run "$cfg" >/dev/null 2>&1 || cfg_rc_a=$?
 if [ "$cfg_rc_a" -eq 0 ] \
    && [ "$(grep -c 'configChineseText' "$cfg/src/pc/configfile.c")" -eq 6 ] \
    && [ "$(grep -n 'configLanguage\[MAX_CONFIG_STRING\]' "$cfg/src/pc/configfile.c" | cut -d: -f1)" = 1 ] \
@@ -419,7 +452,7 @@ else
     no "add_cn_config：插入位置不对（rc=${cfg_rc_a}）→ $(sed -n '1,12p' "$cfg/src/pc/configfile.c" | tr '\n' '|')"
 fi
 
-cfg_out=$(sh "$repo/scripts/add_cn_config.sh" "$cfg" 2>&1)
+cfg_out=$(cfg_run "$cfg" 2>&1)
 printf '%s\n' "$cfg_out" | grep -q "已齐全" \
     && ok "add_cn_config：重复执行幂等" \
     || no "add_cn_config：复跑不幂等 → $cfg_out"
@@ -428,7 +461,7 @@ printf '%s\n' "$cfg_out" | grep -q "已齐全" \
 mkdir -p "$C/cfgnoforce/src/pc"
 printf 'char         configLanguage[MAX_CONFIG_STRING]    = "";\n' > "$C/cfgnoforce/src/pc/configfile.c"
 cfg_rc_b=0
-sh "$repo/scripts/add_cn_config.sh" "$C/cfgnoforce" >/dev/null 2>&1 || cfg_rc_b=$?
+cfg_run "$C/cfgnoforce" >/dev/null 2>&1 || cfg_rc_b=$?
 [ "$cfg_rc_b" -ne 0 ] \
     && ok "add_cn_config：锚点缺失时非 0 退出（不猜位置）" \
     || no "add_cn_config：锚点缺失却返回 0"

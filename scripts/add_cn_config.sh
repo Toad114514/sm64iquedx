@@ -76,24 +76,48 @@ fi
 # 用 awk 重写整份文件再 mv 回去：不用 sed -i（GNU/BSD 参数不同，且容易动到
 # UTF-8 字节），也不留一个猜不到名字的临时文件。
 tmp=$cfg.cnconfig.$$
-trap 'rm -f "$tmp"' EXIT
+f_decl=$cfg.cndecl.$$
+f_ent=$cfg.cnent.$$
+trap 'rm -f "$tmp" "$f_decl" "$f_ent"' EXIT
 
-awk -v g="$GLOBALS" -v e="$ENTRIES" \
+# ⚠️ 待插入的文本**必须走文件**，不能用 `awk -v g="$GLOBALS"` 传。
+# mawk（Ubuntu 的 /bin/awk 就是它）的 -v 赋值是拿源码解析的，值里有裸换行就
+# 直接 `awk: newline in string ...` + 退出码 2；gawk 容忍，所以本机测不出来。
+# 用 getline 读文件则所有实现都一致。
+printf '%s\n' "$GLOBALS" > "$f_decl"
+printf '%s\n' "$ENTRIES" > "$f_ent"
+
+if ! awk -v g_file="$f_decl" -v e_file="$f_ent" \
     -v g_anchor="$G_ANCHOR" -v e_anchor="$E_ANCHOR" \
     -v want_g="$have_globals" -v want_e="$have_entries" '
+    function slurp(f,   s, l) {
+        s = ""
+        while ((getline l < f) > 0) { s = s l "\n" }
+        close(f)
+        return s
+    }
     { lines[NR] = $0 }
     index($0, g_anchor) && $0 !~ /^[[:space:]]*(extern|[/])/ && g_at == 0 { g_at = NR }
     index($0, e_anchor) && e_at == 0 { e_at = NR }
     END {
+        # 锚点只以 extern/注释形式出现时前面 grep 是过得去的，这里不能静默跳过
+        if (want_g == "no" && g_at == 0) { print "add_cn_config: 锚点无效（只有 extern/注释行）：" g_anchor > "/dev/stderr"; exit 3 }
+        if (want_e == "no" && e_at == 0) { print "add_cn_config: 锚点无效：" e_anchor > "/dev/stderr"; exit 3 }
+        g = slurp(g_file)
+        e = slurp(e_file)
         for (i = 1; i <= NR; i++) {
             # 配置表条目要在锚点行**之前**插入
-            if (want_e == "no" && i == e_at) { print e }
+            if (want_e == "no" && i == e_at) { printf "%s", e }
             print lines[i]
             # 声明要在锚点行**之后**插入
-            if (want_g == "no" && i == g_at) { print g }
+            if (want_g == "no" && i == g_at) { printf "%s", g }
         }
     }
-' "$cfg" > "$tmp"
+' "$cfg" > "$tmp"; then
+    rm -f "$tmp"
+    echo "插入失败：$cfg" >&2
+    exit 1
+fi
 
 mv "$tmp" "$cfg"
 trap - EXIT
