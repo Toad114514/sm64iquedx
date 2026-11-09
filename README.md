@@ -54,57 +54,23 @@ sh ./install.sh -a -c                     # 只构建 Android 汉化版 APK
 | `-c, --chinese` | 使用 `上善若和梅塔的长名字` 制作的汉化版上游仓库 `sm64coopdx-Chinese` 和 `sm64coopdx-Chinese-Android` |
 | `-f, --frontend` | 应用 `patches/0002-djui-frontend.patch`，在 设置 → 其他 里加开关；不应用时只能改配置文件 |
 | `-d, --djmd` | 应用 [djui_modern](https://github.com/Shangshanruo666/djui_modern) 模块 |
-| `-p, --package <方式>` | `auto`（按系统）/ `all`（本机能打的全部）/ `deb` / `rpm` / `arch` / `mac` / `zip`（便携压缩包，解压即玩）/ `other` / `no`；不写就不打包 |
-| `-po, --package-only` | 不克隆/不打补丁/不编译，只用 `--path` 指向的已编译树打包；缺产物时 exit 255 |
+| `-p, --package <方式>` | 将 dist/ 内容打包成软件包或 portable 压缩包 |
+| `-po, --package-only` | 只用 `--path` 指向的已编译树打包；缺产物时 exit 255 |
 | `-o, --path <目录>` | 上游 checkout 位置，默认 `build-iquedx/upstream` |
 | `--dist <目录>` | 成品目录，默认 `dist/`（arch 打包写死读 `dist/`） |
 | `-V, --version <版本>` | 包版本号，默认读 `upstream.txt` 的 `version` |
 | `-n, --print-config` | 只解析参数并打印最终配置，不克隆/不编译；核对参数是否传对 |
 
-打包：
+根据情况可以打包成以下不同的软件包：
 
-- Debian 系 → `sm64coopdx-iquedx_<版本>_<架构>.deb`（`dpkg -i`）
-- Arch 系 → `platform/pacman/` 下 `makepkg -f --nodeps` 出 `sm64coopdx-iquedx-<版本>-<rel>-<架构>.pkg.tar.zst`
+- Debian 系 → 生成 `sm64coopdx-iquedx_<版本>_<架构>.deb` 并使用 `apt install` 安装
+- Arch 系 → 生成 `sm64coopdx-iquedx-<版本>-<rel>-<架构>.pkg.tar.zst`
   - 本来想提交到 AUR 的，最近不给注册开放，所以目前还不能 `yay -S sm64coopdx-iquedx`
-- 红帽系 / openSUSE → `sm64coopdx-iquedx-<版本>-<rel>.<架构>.rpm`（`dnf` / `zypper`）
-- macOS → `SM64CoopDeluxe.app`，默认再包一层 `.dmg`（`--pkg` 出 `.pkg`、`--zip` 出 zip、`--app-only` 只出 app）
+- 红帽系 / openSUSE → 生成 `sm64coopdx-iquedx-<版本>-<rel>.<架构>.rpm`
+- macOS → 生成 `SM64CoopDeluxe.app`，默认再包一层 `.dmg`
 - 其他 Linux / Unix → `--package other` 只提示安装命令，本体一律装在 `/opt/sm64coopdx-iquedx`
 
-Windows 目前只保证 `make` 能出 `sm64coopdx.exe`（MSYS2/MinGW），打包向导（`install.bat`）还没做。
-
-### 只打包（`-po`）
-
-编译和打包可以拆成两次执行——CI 里就是两个 job，第二个 job 只有第一个的产物：
-
-```bash
-sh install.sh -c -f -d -p no                                # 只编译
-sh install.sh -po -p all --path build-iquedx/upstream        # 只打包
-```
-
-`-po/--package-only` 跳过克隆、打补丁、编译，直接用 `--path` 指向的已编译源码树收集成品并打包：
-
-- **必须显式给 `--path`**（不接受默认值猜测）；
-- 不给 `-p` 时默认等于 `all`（本机能打的全部格式，缺工具只警告不跳过流程）；
-- 找不到构建产物时**以 `255` 退出**，并区分两种情况：「构建产物路径未指定」/「还没开始 make」。
-
-### GitHub Actions
-
-- `.github/workflows/build-desktop.yml` —— 三平台 × 两套架构，共五个 job，默认参数 `-c -f -d`：
-
-  | job | runner | 架构 | 产物 |
-  |---|---|---|---|
-  | `linux` | `ubuntu-22.04` | x86_64 | deb / rpm / arch / portable-zip |
-  | `linux-arm` | `ubuntu-22.04-arm` | aarch64 | deb / arch / portable-zip（不出 rpm） |
-  | `windows` | `windows-latest` | x86_64 | portable-zip |
-  | `macos` | `macos-latest` | arm64 | dmg / portable-zip |
-  | | `macos-15-intel` | x86_64 | dmg / portable-zip |
-
-  编译完再用 `-po -p all` 出包。Arch 包需要 `makepkg`：x86_64 进 `archlinux:latest`，aarch64 进 `menci/archlinuxarm:base-devel`（官方 archlinux 镜像只有 x86_64），宿主机不需要装 Arch。**产物按格式拆成独立 artifact 且名字带架构**（如 `sm64iquedx-linux-aarch64-deb`），不再是一个大 zip 里套一层 `dist/`。
-- Intel Mac 的 runner 只到 2027 年秋（GitHub 说届时停止支持 x86_64 macOS），那之后这一腿要删掉。
-- `.github/workflows/build-android.yml` —— 默认参数 `-a -c -f -d`，装 SDK 33 + build-tools 33.0.2，跑完 `make TOUCH_CONTROLS=1` 再 `gradlew assembleRelease`，用上游自带证书签名后上传 APK。
-
-两个 workflow 都会先跑 `scripts/test_install_args.sh`(53 项，离线) 当门禁。
-自测不依赖宿主机的打包工具（`dpkg-deb` / `rpmbuild` / `makepkg` 都有桩），所以三平台结果一致。
+Windows 目前仅有 make，打包为向导安装程序目前没有做
 
 也可以 fork 后用 GitHub Actions 自己编译，或到上善若的汉化群 https://qm.qq.com/q/twjhRVjgWs 找我要成品 *（为控制国内马里奥圈小鬼数量不直接发布）*。
 
