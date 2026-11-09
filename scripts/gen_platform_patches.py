@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Generate the small per-Android patches.  All of them live flat in patches/.
+"""Generate the single shared Android platform patch.  It lives flat in patches/.
 
 Four upstreams share one main patch set, also flat in patches/::
 
     0001-src-overlay.patch        required, shared (no lang/*.ini in it)
     0002-djui-frontend.patch      optional, shared (DJUI toggle)
-    0005-android.patch            platform delta, android only
-    0006-android-cn.patch         platform delta, android-cn only
+    0005-android.patch            platform delta, shared by android + android-cn
     cn_extra/                     new files, copied verbatim
 
 ``lang/*.ini`` is not patched at all.  Every upstream has its own ini with
@@ -15,20 +14,26 @@ different line numbers, and the Chinese fork already ships a
 needed strings are inserted at apply time by ``scripts/add_lang_strings.sh``
 (idempotent, key-based), which works on all four upstreams unchanged.
 
-Only two kinds of differences remain for the platform patches:
+Only two kinds of differences remain for the platform patch:
 
-1. Three files drifted away from the PC baseline, so 0001 has to be applied
-   with ``--exclude=...`` on Android.  The platform patch supplies their
-   correct final state instead (computed by three-way merge):
+1. Two files drifted away from the PC baseline, so 0001 has to be applied with
+   ``--exclude=...`` on Android.  The platform patch supplies their correct
+   final state instead (computed by three-way merge):
 
        Makefile               PC build script (ndk-build never reads it)
-       src/pc/configfile.c    Android inserts a TOUCH_CONTROLS config block
        src/pc/pc_main.c       Android uses SDL_main / TARGET_ANDROID branches
 
 2. ndk-build reads ``Android.mk``, not the PC Makefile.  The
    ``SM64COOPDX_CN_TEXT`` macro therefore has to be injected into
    ``LOCAL_CFLAGS`` or every ``#if defined(SM64COOPDX_CN_TEXT)`` block is
-   compiled out and the Chinese pack silently does nothing.
+   compiled out and the Chinese pack silently does nothing on Android.
+
+``src/pc/configfile.c`` is excluded from 0001 too, but it does NOT get a patch:
+the two Android forks insert their TOUCH_CONTROLS block at exactly the spot the
+PC patch also inserts code, so the only difference between the two per-fork
+patches used to be the surrounding context (``configSnapTouch`` vs
+``configElementSnap``).  Its six lines are inserted by
+``scripts/add_cn_config.sh`` instead -- one script, all upstreams.
 
 Three-way merge for the final state::
 
@@ -55,28 +60,34 @@ from pathlib import Path
 
 FRONTEND = "src/pc/djui/djui_panel_misc.c"
 ANDROID_MK = "Android.mk"
+CONFIGFILE = "src/pc/configfile.c"
 EN_INI = "lang/English.ini"
 CN_INI = "lang/Chinese.ini"
 
 MAIN_PATCH = "0001-src-overlay.patch"
 FRONTEND_PATCH = "0002-djui-frontend.patch"
-PLATFORM_PATCH = {
-    "android": "0005-android.patch",
-    "android-cn": "0006-android-cn.patch",
-}
+# 一份平台补丁，两个 Android 上游共用。两边的 Makefile / pc_main.c / Android.mk
+# 内容完全相同，所以 hunk 也完全相同；生成时会逐字节比对，一旦哪天漂开就直接
+# 报错，而不是静默产出一份只对其中一个上游有效的补丁。
+ANDROID_PATCH = "0005-android.patch"
 
 # Files 0001 must skip on Android.  lang/*.ini is NOT here: 0001 never contains
 # it, so the applier does not need to exclude it.  Keep this list in sync with
 # scripts/apply_patches.sh; the script asserts both ends.
+#
+# CONFIGFILE is excluded but is not covered by the patch -- its lines come from
+# scripts/add_cn_config.sh.  The other two are the patch's job.
 EXCLUDED = (
     "Makefile",
-    "src/pc/configfile.c",
+    CONFIGFILE,
     "src/pc/pc_main.c",
 )
+PLATFORM_FILES = tuple(sorted((set(EXCLUDED) - {CONFIGFILE}) | {ANDROID_MK}))
 LANG_FILES = (EN_INI, CN_INI)
 
-# 语言字符串必须由 add_lang_strings.sh 插进去，不能偷偷回到补丁里。
+# 语言字符串与配置项都必须由脚本插进去，不能偷偷回到补丁里。
 LANG_SCRIPT = "scripts/add_lang_strings.sh"
+CONFIG_SCRIPT = "scripts/add_cn_config.sh"
 LANG_EXPECT = {
     "android": ((EN_INI, ("CHINESE_TEXT_PACK", "Chinese =")),),
     "android-cn": (
@@ -138,7 +149,7 @@ def resolve_conflicts(text: str, rel: str, count: int) -> str:
 
     def decide(m):
         ours, theirs = m.group(1), m.group(2)
-        if rel == "src/pc/configfile.c":
+        if rel == CONFIGFILE:
             ok = "#ifdef TOUCH_CONTROLS" in ours and "chinese_text_user_set" in theirs
             return ours + theirs if ok else None
         if rel == "src/pc/pc_main.c":
@@ -198,13 +209,12 @@ def apply(cwd: Path, patch: Path, excludes=()) -> None:
         raise SystemExit(f"应用失败 {patch.name}: {r.stderr.decode(errors='replace')}")
 
 
-def run_lang_script(repo: Path, tree: Path) -> None:
-    r = run(["sh", str(repo / LANG_SCRIPT), str(tree)])
+def run_script(repo: Path, script: str, tree: Path, *extra) -> str:
+    r = run(["sh", str(repo / script), str(tree), *extra])
+    out = r.stdout.decode(errors="replace")
     if r.returncode != 0:
-        raise SystemExit(
-            f"{LANG_SCRIPT} 失败: {r.stdout.decode(errors='replace')}"
-            f"{r.stderr.decode(errors='replace')}"
-        )
+        raise SystemExit(f"{script} 失败: {out}{r.stderr.decode(errors='replace')}")
+    return out
 
 
 def check_lang_strings(name: str, tree: Path) -> None:
@@ -218,15 +228,11 @@ def check_lang_strings(name: str, tree: Path) -> None:
                 raise SystemExit(f"{name}: {rel} 缺少 {key}")
 
 
-def build_one(name, upstream, pc_base, src_root, repo, tmp):
-    print(f"\n===== {name} ({upstream}) =====")
-    out_dir = repo / "patches"          # 平铺，不再建 patches/<target>/ 子目录
-    out_dir.mkdir(parents=True, exist_ok=True)
-    work = tmp / name
+def compute(name, upstream, pc_base, src_root):
+    """Terminal state for every touched file + the platform diffs for this upstream."""
+    work = _tmp / name
     work.mkdir(parents=True, exist_ok=True)
-    platform_patch = out_dir / PLATFORM_PATCH[name]
 
-    # --- final state for every file in src/, via three-way merge ---
     final = {}
     for src_file in sorted(src_root.rglob("*")):
         if not src_file.is_file() or src_file.name == ".gitkeep":
@@ -245,69 +251,52 @@ def build_one(name, upstream, pc_base, src_root, repo, tmp):
     final[ANDROID_MK] = inject_android_mk(upstream / ANDROID_MK)
     write(work / ANDROID_MK, final[ANDROID_MK])
 
-    # --- platform patch = excluded drift files + Android-only build file ---
-    platform_files = sorted(set(EXCLUDED) | {ANDROID_MK})
-    for rel in platform_files:
+    parts = {}
+    for rel in PLATFORM_FILES:
         if rel not in final:
             raise SystemExit(f"{name}: 平台文件 {rel} 没有终态（src/ 里缺？）")
-
-    parts, covered = [], []
-    for rel in platform_files:
         d = diff_text(upstream / rel, work / rel, rel)
         if d:
-            parts.append(d)
-            covered.append(rel)
-    write(platform_patch, "".join(parts))
-    print(f"  {PLATFORM_PATCH[name]}: {len(covered)} 个文件 — {', '.join(covered)}")
+            parts[rel] = d
+    missing = sorted(set(PLATFORM_FILES) - set(parts))
+    if missing:
+        raise SystemExit(f"{name}: 平台补丁应覆盖 {missing}，但它们与上游无差异")
+    return final, parts
 
-    main = out_dir / MAIN_PATCH
-    frontend = out_dir / FRONTEND_PATCH
-    main_files = {
-        line[6:] for line in read(main).splitlines() if line.startswith("--- a/")
-    }
-    if set(main_files) & set(LANG_FILES):
-        raise SystemExit("0001 仍含 lang/*.ini，先重跑 scripts/gen_all_patches.sh")
-    if not set(EXCLUDED) <= set(covered):
-        raise SystemExit(f"{name}: 被排除的文件未全部由平台补丁覆盖: "
-                         f"{sorted(set(EXCLUDED) - set(covered))}")
-    overlap = (set(covered) & main_files) - set(EXCLUDED)
-    if overlap:
-        raise SystemExit(f"{name}: 平台补丁与 0001 重复: {sorted(overlap)}")
-    if set(covered) & set(LANG_FILES):
-        raise SystemExit(f"{name}: 平台补丁不应含 lang/*.ini（语言字符串走 add_lang_strings.sh）")
-    if FRONTEND in covered:
-        raise SystemExit(f"{name}: 平台补丁不应包含可选前端 {FRONTEND}")
 
-    # 语言文件也要复制进校验树，否则 add_lang_strings.sh 无处可插。
-    lang_present = {rel for rel in LANG_FILES if (upstream / rel).exists()}
-    files = sorted(set(final) | {FRONTEND} | lang_present)
+def verify(name, upstream, final, patch, repo, lang_present):
+    # 语言文件与 configfile.c 也要复制进校验树，否则脚本无处可插。
+    files = sorted(set(final) | {FRONTEND} | set(lang_present))
 
-    # --- verify A: full path, shared 0001 (excluded) + platform + 0002 + lang script ---
-    check = tmp / f"{name}-check"
+    # --- verify A: 完整链路 0001(excluded) + 平台补丁 + 0002 + 两个插入脚本 ---
+    check = _tmp / f"{name}-check"
     pristine_copy(upstream, check, files)
-    apply(check, main, EXCLUDED)
-    apply(check, platform_patch)
-    apply(check, frontend)
-    run_lang_script(repo, check)
+    apply(check, repo / "patches" / MAIN_PATCH, EXCLUDED)
+    apply(check, patch)
+    apply(check, repo / "patches" / FRONTEND_PATCH)
+    run_script(repo, CONFIG_SCRIPT, check)
+    run_script(repo, LANG_SCRIPT, check)
     for rel, want in final.items():
         if read(check / rel) != want:
             raise SystemExit(f"{name}: 应用后 {rel} 与三方合并终态不一致")
     check_lang_strings(name, check)
-    print(f"  ✅ 0001(--exclude {len(EXCLUDED)}) + {platform_patch.name} + 0002 + "
-          f"add_lang_strings.sh == 终态（{len(final)} 文件逐字节，语言字符串齐全）")
+    print(f"  ✅ 0001(--exclude {len(EXCLUDED)}) + {patch.name} + 0002 + "
+          f"add_cn_config.sh + add_lang_strings.sh == 终态（{len(final)} 文件逐字节）")
 
-    # --- verify A2: 语言脚本幂等 ---
-    r = run(["sh", str(repo / LANG_SCRIPT), str(check), "--check"])
-    if r.returncode != 0 or "已齐全" not in r.stdout.decode(errors="replace"):
+    # --- verify A2: 两个插入脚本幂等 ---
+    if "已齐全" not in run_script(repo, LANG_SCRIPT, check, "--check"):
         raise SystemExit(f"{name}: add_lang_strings.sh 复跑不幂等")
-    print(f"  ✅ add_lang_strings.sh 复跑无改动（幂等）")
+    if "已齐全" not in run_script(repo, CONFIG_SCRIPT, check, "--check"):
+        raise SystemExit(f"{name}: add_cn_config.sh 复跑不幂等")
+    print("  ✅ 两个插入脚本复跑无改动（幂等）")
 
-    # --- verify B: 0002 really is optional ---
-    nofrontend = tmp / f"{name}-nofrontend"
+    # --- verify B: 0002 真的是可选的 ---
+    nofrontend = _tmp / f"{name}-nofrontend"
     pristine_copy(upstream, nofrontend, files)
-    apply(nofrontend, main, EXCLUDED)
-    apply(nofrontend, platform_patch)
-    run_lang_script(repo, nofrontend)
+    apply(nofrontend, repo / "patches" / MAIN_PATCH, EXCLUDED)
+    apply(nofrontend, patch)
+    run_script(repo, CONFIG_SCRIPT, nofrontend)
+    run_script(repo, LANG_SCRIPT, nofrontend)
     if read(nofrontend / FRONTEND) != read(upstream / FRONTEND):
         raise SystemExit(f"{name}: 不应用 0002 时前端文件被意外修改")
     for rel, want in final.items():
@@ -315,14 +304,14 @@ def build_one(name, upstream, pc_base, src_root, repo, tmp):
             raise SystemExit(f"{name}: 不应用 0002 时 {rel} 未达到终态")
     print(f"  ✅ 不应用 0002 时 {FRONTEND} 保持上游原版")
 
-    # --- verify C: is any exclusion now stale? (informational only) ---
-    pristine = tmp / f"{name}-pristine"
+    # --- verify C: 排除项是否已经不再需要（仅提示，不自动收缩） ---
+    pristine = _tmp / f"{name}-pristine"
     pristine_copy(upstream, pristine, files)
     for rel in EXCLUDED:
-        d = diff_text(pc_base / rel, src_root / rel, rel)
+        d = diff_text(_pc_base / rel, repo / "src" / rel, rel)
         if not d:
             continue
-        one = tmp / f"{name}-one.patch"
+        one = _tmp / f"{name}-one.patch"
         write(one, d)
         r = run(["git", "apply", "--check", "-p1", str(one)], cwd=pristine)
         if r.returncode == 0:
@@ -331,6 +320,7 @@ def build_one(name, upstream, pc_base, src_root, repo, tmp):
 
 
 def main():
+    global _tmp, _pc_base
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", default=str(Path(__file__).resolve().parent.parent))
     ap.add_argument("--pc-base", required=True)
@@ -346,8 +336,9 @@ def main():
     for patch in (MAIN_PATCH, FRONTEND_PATCH):
         if not (repo / "patches" / patch).exists():
             raise SystemExit(f"缺少共用补丁 patches/{patch}，先跑 scripts/gen_all_patches.sh")
-    if not (repo / LANG_SCRIPT).exists():
-        raise SystemExit(f"缺少 {LANG_SCRIPT}")
+    for script in (LANG_SCRIPT, CONFIG_SCRIPT):
+        if not (repo / script).exists():
+            raise SystemExit(f"缺少 {script}")
 
     # The exclusion list exists in two places; never let them drift apart.
     apply_script = repo / "scripts" / "apply_patches.sh"
@@ -363,14 +354,66 @@ def main():
         )
     if "--frontend" not in applier and FRONTEND_PATCH not in applier:
         raise SystemExit("scripts/apply_patches.sh 没有接线 0002")
+    if CONFIG_SCRIPT.split("/")[-1] not in applier:
+        raise SystemExit(f"scripts/apply_patches.sh 没有接线 {CONFIG_SCRIPT}")
+
+    # 主补丁里不应再出现 lang/*.ini，也不应出现任何平台补丁覆盖的文件。
+    main = repo / "patches" / MAIN_PATCH
+    main_files = {line[6:] for line in read(main).splitlines() if line.startswith("--- a/")}
+    if set(main_files) & set(LANG_FILES):
+        raise SystemExit("0001 仍含 lang/*.ini，先重跑 scripts/gen_all_patches.sh")
+    # 平台补丁覆盖的文件本来就在 0001 里（正因为 0001 打不上才需要平台补丁），
+    # 所以这里只检查「没被 --exclude 掉却出现在平台补丁里」。
+    overlap = (set(main_files) & set(PLATFORM_FILES)) - set(EXCLUDED)
+    if overlap:
+        raise SystemExit(f"0001 与平台补丁重复: {sorted(overlap)}")
+    if FRONTEND in PLATFORM_FILES or set(PLATFORM_FILES) & set(LANG_FILES):
+        raise SystemExit("平台补丁不应包含前端或 lang/*.ini")
+
+    targets = (
+        ("android", Path(a.android).resolve()),
+        ("android-cn", Path(a.android_cn).resolve()),
+    )
+    langs = {name: tuple(rel for rel in LANG_FILES if (up / rel).exists()) for name, up in targets}
 
     with tempfile.TemporaryDirectory(prefix="ique-platform-") as td:
-        tmp = Path(td)
-        build_one("android", Path(a.android).resolve(), pc_base, src_root, repo, tmp)
-        build_one("android-cn", Path(a.android_cn).resolve(), pc_base, src_root, repo, tmp)
+        _tmp = Path(td)
+        _pc_base = pc_base
+
+        results, diffs = {}, None
+        for name, upstream in targets:
+            print(f"\n===== {name} ({upstream}) =====")
+            final, parts = compute(name, upstream, pc_base, src_root)
+            results[name] = (upstream, final)
+            if diffs is None:
+                diffs = parts
+            elif parts != diffs:
+                # 补丁每个上游一份的唯一理由就是这里：某份文件的终态 diff 不一样。
+                # 真出现了就说明两个上游确实分道扬镳，得退回「每目标一份平台补丁」。
+                bad = sorted(set(parts) ^ set(diffs)) or \
+                      [r for r in parts if parts[r] != diffs.get(r)]
+                raise SystemExit(
+                    f"两个 Android 上游的平台增量不同（{bad}），不能共用 {ANDROID_PATCH}：\n"
+                    f"  请把不同的文件从 PLATFORM_FILES 里拆出来，改成每目标一份补丁。"
+                )
+
+        patch_text = "".join(diffs[rel] for rel in PLATFORM_FILES)
+        patch = repo / "patches" / ANDROID_PATCH
+        write(patch, patch_text)
+        print(f"\n{ANDROID_PATCH}: {len(diffs)} 个文件 — {', '.join(sorted(diffs))}"
+              f"（两个上游共用一份）")
+
+        stale = repo / "patches" / "0006-android-cn.patch"
+        if stale.exists():
+            raise SystemExit(f"旧的 {stale.name} 还在，删掉它（已经并进 {ANDROID_PATCH}）")
+
+        for name, upstream in targets:
+            print(f"\n===== 校验 {name} =====")
+            verify(name, upstream, results[name][1], patch, repo, langs[name])
 
     print("\n完成。共用 0001/0002 与 cn_extra 未改动；"
-          "0005/0006 是平台增量，语言字符串由 scripts/add_lang_strings.sh 插入。")
+          f"{ANDROID_PATCH} 由两个 Android 目标共用，语言字符串与配置项由 "
+          "scripts/add_lang_strings.sh / scripts/add_cn_config.sh 插入。")
 
 
 if __name__ == "__main__":

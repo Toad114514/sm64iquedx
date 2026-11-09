@@ -7,8 +7,8 @@
 src/                  被修改过的文件，完整副本，路径与上游**逐级一致**（唯一编辑源）
 patches/NNNN-*.patch  **全部平铺在 patches/ 根目录，不建子目录**：
                       0001 共用主补丁 / 0002 共用可选前端
-                      0005、0006 两个 Android 平台增量
-                      （语言字符串不是补丁，见 scripts/add_lang_strings.sh）
+                      0005 一份 Android 平台增量（两个 Android 目标共用）
+                      （语言字符串/配置项不是补丁，见 scripts/add_{lang_strings,cn_config}.sh）
 patches/cn_extra/     上游根本不存在的新增文件，完整副本，路径与上游逐级一致
 platform/             特定平台/发行包的补丁与构建脚本
 scripts/              生成补丁的辅助脚本 + 参数自测
@@ -67,9 +67,9 @@ patches/cn_extra/src/pc/djui/cn_glyphs.h  → 上游 src/pc/djui/cn_glyphs.h（d
 - 命名：`NNNN-短横线描述.patch`，四位数递增。**所有补丁平铺在 `patches/` 根目录**，不要为某个平台建子目录。
 - 一律 `git diff` 格式、相对上游根目录的路径（`a/src/...`）。
 - 必须能用 `patch -p1` 或 `git apply -p1` 在 `upstream.txt` 指定的基线上干净应用。
-- `0001`/`0002` **由 `scripts/gen_all_patches.sh` 从 `src/` 一次生成**；`0005`/`0006` 由 `scripts/gen_platform_patches.py` 生成。都不手工编写、不手工改。
+- `0001`/`0002` **由 `scripts/gen_all_patches.sh` 从 `src/` 一次生成**；`0005` 由 `scripts/gen_platform_patches.py` 生成。都不手工编写、不手工改。
 - 应用前先 `git apply --check`；选了与声明不同的基线时可以跳过补丁、直接用 `src/` 覆盖终态。
-- **只有一份主补丁**：PC 与两个 Android 上游共用 `0001`/`0002`，不要为 Android 再复制一整套。平台差异走 `0005`/`0006`，见下一节。
+- **只有一份主补丁、一份平台补丁**：PC 与两个 Android 上游共用 `0001`/`0002`，两个 Android 目标共用 `0005`。不要为某个上游复制一整套，也不要再做一个「每上游一份」的平台补丁——上下文漂移改用插入脚本消解，见下一节。
 
 ## 语言字符串：脚本插入，不做补丁
 
@@ -90,12 +90,20 @@ scripts/add_lang_strings.sh <上游根目录> [--check]
 
 改文案只改脚本里的两处常量，任何补丁都不用重生成。`--check` 只报告不写盘；对 PC 基线跑一次的结果与 `src/lang/English.ini` 逐字节一致。
 
-## 平台增量补丁：0005 / 0006
+## 平台增量补丁：0005（两个 Android 目标共用）
 
-两份各 4 个文件（`Android.mk`、`Makefile`、`src/pc/configfile.c`、`src/pc/pc_main.c`），只负责共用主补丁覆盖不到的部分：
+一份补丁，3 个文件（`Android.mk`、`Makefile`、`src/pc/pc_main.c`），只负责共用主补丁覆盖不到的部分：
 
-1. **三个上下文漂移文件**：`Makefile`、`src/pc/configfile.c`、`src/pc/pc_main.c`。应用 `0001` 时用 `--exclude` 跳过它们，由平台补丁给出三方合并后的终态。
+1. **两个上下文漂移文件**：`Makefile`、`src/pc/pc_main.c`。应用 `0001` 时用 `--exclude` 跳过它们，由平台补丁给出三方合并后的终态。
 2. **`Android.mk` 的宏注入**：ndk-build 不读 Makefile，必须往 `LOCAL_CFLAGS` 加 `-DSM64COOPDX_CN_TEXT=1`，否则汉化整块被编译掉。
+
+### 第三个漂移文件 `configfile.c` 为什么不进补丁
+
+它同样被 `--exclude`，但终态由 `scripts/add_cn_config.sh` 插入那 6 行（3 个 `configChineseText*` 声明 + 3 条 `chinese_text*` 配置表条目）。原因：原版 Android 上游与汉化版 Android 上游在这里差了半代（`configSnapTouch` vs `configElementSnap`），做补丁就得每个上游一份，而两份的差别只有上下文、加进去的行完全一样。以前确实这么干过（`0005` / `0006`），逐行比只有 24 行差异，全是这种上下文漂移——维护成本全在「上游一动就重生成两份」。
+
+插入脚本是幂等的（按锚点插、已存在则跳过、`--check` 只报告），三棵树实测逐字节一致：`android` 上游 + 脚本 == 旧 `0005` 终态、`android-cn` 上游 + 脚本 == 旧 `0006` 终态、PC 基线 + 脚本 == `src/src/pc/configfile.c`。
+
+`gen_platform_patches.py` 会**逐文件比对两个上游算出的平台增量**，一旦不同就直接报错——那说明两个上游真的分道扬镳，该把那个文件拆出去做每目标一份，而不是让共用补丁静默只对其中一个有效。
 
 排除列表只剩这 3 个文件，同时存在于 `scripts/gen_platform_patches.py` 的 `EXCLUDED` 和 `scripts/apply_patches.sh`，生成脚本会断言两者一致——**改一处必须改另一处**。
 
@@ -126,8 +134,9 @@ scripts/apply_patches.sh <pc|android|android-cn> <上游干净 checkout> [--fron
 | --- | --- |
 | `apply_patches.sh <目标> <上游根目录> [--frontend]` | **应用器**，按目标选补丁、按序叠加、补缺拷贝 `cn_extra/`、插语言字符串，幂等；平时用它，别手写 `git apply --exclude` |
 | `add_lang_strings.sh <上游根目录> [--check]` | 往 `lang/*.ini` 按键插入「中文字库」开关的两条字符串，四套上游共用，幂等 |
+| `add_cn_config.sh <上游根目录> [--check]` | 往 `src/pc/configfile.c` 插入 3 个 `configChineseText*` 声明和 3 条配置表条目（`--exclude` 掉的第三个漂移文件），两个 Android 上游共用，幂等 |
 | `gen_all_patches.sh <上游基线根目录>` | **改完 `src/` 后跑这个**，一次生成共用的 0001 / 0002 并断言分工 |
-| `gen_platform_patches.py --pc-base … --android … --android-cn …` | 重生成 0005 / 0006，内含三方合并、冲突消解与终态自检 |
+| `gen_platform_patches.py --pc-base … --android … --android-cn …` | 重生成 0005（两个上游共用一份），内含三方合并、冲突消解、两上游增量一致性断言与终态自检 |
 | `gen_patches.sh <上游根目录> [输出] [--only 前缀] [--exclude 前缀]` | 单个补丁生成器，按相对路径前缀筛选；`--only`/`--exclude` 可各重复多次（取并集） |
 | `test_install_args.sh` | `install.sh` 的参数自测：解析、错误路径、以及参数是否真的传到下游（桩掉 git/make/gradle，离线、不编译） |
 
@@ -244,8 +253,9 @@ DESTDIR=/tmp/stage sh platform/freedesktop/install.sh <目录>   # 装进 stagin
 | 改上游已有文件（核心） | `src/`（路径一致） | 生成 `0001-src-overlay.patch`，`git apply -p1` |
 | 改上游已有文件（可选前端） | `src/`（路径一致） | 生成 `0002-djui-frontend.patch`，按 `--frontend` 决定要不要打 |
 | 改语言字符串 | `scripts/add_lang_strings.sh` 的常量 | 应用阶段按键插入，不生成补丁 |
+| 改中文配置项（Android） | `scripts/add_cn_config.sh` 的常量 | 同上，按锚点插入 |
 | 上游没有的新文件 | `patches/cn_extra/`（路径一致） | 逐文件补缺拷贝到上游根（已存在的跳过） |
-| Android 平台差异 | `scripts/gen_platform_patches.py` 三方合并 | 生成 `0005` / `0006`，`git apply -p1` |
+| Android 平台差异 | `scripts/gen_platform_patches.py` 三方合并 | 生成共享的 `0005`，`git apply -p1` |
 | 特定平台/发行包差异 | `platform/<name>/` | install.sh 按需调用 |
 
 ## 分支
@@ -261,7 +271,7 @@ DESTDIR=/tmp/stage sh platform/freedesktop/install.sh <目录>   # 装进 stagin
 
 - `src/` 26 个文件：Makefile、text/define_{courses,text}.inc.c、`src/game|menu|pc` 下 23 个（含 `rom_checker.h`）。**`lang/English.ini` 不在其中**：它的改动只有两条字符串，由 `scripts/add_lang_strings.sh` 在应用时插入，脚本对基线跑一次即得到与实验工作区逐字节相同的文件。
 - `patches/cn_extra/` 14 个上游不存在的文件：`cn_font`、`cn_tex`、`cn_data/*.h`、`cn_intro_data.c`、`text/cn_*.inc.c`、`src/pc/rom_checker_ique.cpp`、`lang/Chinese.ini`、`src/pc/djui/cn_glyphs.h`；除最后一份（给没有汉化字表的原版上游补 djui_modern 的硬依赖，见 `patches/README.md`）外，均已用 `git cat-file -e 8cd6e59:<path>` 确认上游不存在，且与实验工作区逐字节一致。
-- 4 份补丁**平铺**在 `patches/`：0001（25 文件，必选）、0002（1 文件，可选前端）、0005（4 文件，原版 Android 平台）、0006（4 文件，汉化版 Android 平台）。0001 不含任何 `lang/*.ini`。
-- 校验：`8cd6e59` + 0001 + 0002 + `cn_extra/` + `add_lang_strings.sh` 与 `src/` 26/26 逐字节一致，`lang/English.ini` 与实验工作区一致；两个 Android 上游应用后与三方合并终态 27 文件逐字节一致；三套基线首次应用 + 幂等复跑均通过；`cn_extra` 14/14 一致，无冲突标记残留。
+- 3 份补丁**平铺**在 `patches/`：0001（25 文件，必选）、0002（1 文件，可选前端）、0005（3 文件，Android 平台，两个 Android 目标共用）。0001 不含任何 `lang/*.ini`，`configfile.c` 的中文配置项由 `scripts/add_cn_config.sh` 插。
+- 校验：`8cd6e59` + 0001 + 0002 + `cn_extra/` + `add_lang_strings.sh` 与 `src/` 26/26 逐字节一致，`lang/English.ini` 与实验工作区一致；两个 Android 上游（0001 + 共享 0005 + 0002 + 两个插入脚本）应用后与三方合并终态各 27 文件逐字节一致；三套基线首次应用 + 幂等复跑均通过；`cn_extra` 14/14 一致，无冲突标记残留。
 - `platform/`：DEBIAN（`control.in` + `mkdeb.sh`）、pacman（`PKGBUILD` + `.install`）、rpm（`sm64coopdx-iquedx.spec` + `mkrpm.sh`）、darwin（`Info.plist.in` + `mkmac.sh`）、freedesktop（`.desktop` + PNG 图标 + `install.sh`）。
 - 汉化版上游自带的 `palettes/*.ini`、`src/pc/djui/*_glyphs.h`、`textures/custom_font/*.png` 属于所选上游本身，不在本仓库收录范围；它自带的 `lang/Chinese.ini` 也不会被 `cn_extra/` 覆盖（只补缺）。

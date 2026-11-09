@@ -1,13 +1,12 @@
 # 补丁索引
 
-**所有补丁平铺在 `patches/` 根目录，不建子目录。** 四套上游共用 `0001` / `0002` / `cn_extra/`；Android 只额外叠加一份平台增量。语言字符串**不是补丁**，由 `scripts/add_lang_strings.sh` 在应用阶段插入。
+**所有补丁平铺在 `patches/` 根目录，不建子目录。** 四套上游共用 `0001` / `0002` / `cn_extra/`；两个 Android 目标共用**同一份**平台增量。语言字符串与中文配置项**不是补丁**，由 `scripts/add_lang_strings.sh` / `scripts/add_cn_config.sh` 在应用阶段插入。
 
 | 补丁 | 文件数 | 适用目标 | 作用 |
 | --- | --- | --- | --- |
 | `0001-src-overlay.patch` | 25 | `pc` / `android` / `android-cn` 共用 | 必选，核心代码改动。**不含任何 `lang/*.ini`，也不含 DJUI 前端** |
 | `0002-djui-frontend.patch` | 1 | 三目标共用 | 可选，设置 → 其他 的「中文字库」开关 |
-| `0005-android.patch` | 4 | `android` 专用 | 必选，Android 平台增量 |
-| `0006-android-cn.patch` | 4 | `android-cn` 专用 | 必选，Android 平台增量 |
+| `0005-android.patch` | 3 | `android` / `android-cn` **共用** | 必选，Android 平台增量 |
 | `cn_extra/` | 14 | 三目标共用 | 上游不存在的新增文件，仅补缺、不覆盖 |
 
 四套上游与目标名的对应见仓库根 `upstream.txt`；`pc` 同时覆盖原版 CoopDX 与上善若的 PC 汉化版。
@@ -45,16 +44,15 @@ scripts/add_lang_strings.sh <上游根目录> [--check]
 
 ## 平台增量补丁
 
-`0005` / `0006` 各 4 个文件：`Android.mk`、`Makefile`、`src/pc/configfile.c`、`src/pc/pc_main.c`。**不含任何 ini**。
+`0005` **只有一份**，两个 Android 目标共用，含 3 个文件：`Android.mk`、`Makefile`、`src/pc/pc_main.c`。**不含任何 ini，也不含 `configfile.c`**。
 
 | 文件 | 原因 |
 | --- | --- |
 | `Android.mk` | 注入 `LOCAL_CFLAGS += -DSM64COOPDX_CN_TEXT=1`（带 `CN_TEXT_PACK=false` 开关）。PC 靠 `Makefile` 注入这个宏，**ndk-build 根本不读 Makefile**，不注入的话所有 `#if defined(SM64COOPDX_CN_TEXT)` 都会被编译掉，汉化完全不生效 |
 | `Makefile` | 三方合并后的 PC 改动。对 ndk-build 无作用，保留以便与 PC 一致；`CN_TEXT_DEPS` 对生成 `text/define_*.inc.c` 仍有实际作用 |
-| `src/pc/configfile.c` | Android 在中文配置项的同一位置插入 `TOUCH_CONTROLS` 块 |
 | `src/pc/pc_main.c` | Android 在中文初始化的同一位置切 `SDL_main` / `TARGET_ANDROID` 签名分支 |
 
-这 3 个「上下文漂移」文件在应用 `0001` 时被 `--exclude` 跳过，由平台补丁直接给出终态。终态由三方合并得到：
+`Makefile` 与 `pc_main.c` 这两个「上下文漂移」文件在应用 `0001` 时被 `--exclude` 跳过，由平台补丁直接给出终态。终态由三方合并得到：
 
 ```
 base   = PC 8cd6e59
@@ -62,16 +60,38 @@ ours   = 对应 Android 上游
 theirs = 本仓库 src/（PC 终态）
 ```
 
-两处**双方在同一位置插入**的冲突按固定规则消解，出现任何其它冲突时生成脚本直接报错退出，不静默产出坏补丁：
+`pc_main.c` 是**双方在同一位置插入**，按固定规则消解；出现任何其它冲突时生成脚本直接报错退出，不静默产出坏补丁：
 
 | 文件 | Android 侧 | PC 侧 | 消解 |
 | --- | --- | --- | --- |
-| `configfile.c` | `#ifdef TOUCH_CONTROLS` 触屏配置项 | 3 个 `configChineseText*` 配置项 | Android 块在前，PC 条目在后 |
 | `pc_main.c` | `#ifdef TARGET_ANDROID / int SDL_main / #else` | 中文文本包初始化 | PC 函数块在前，Android 签名分支在后 |
 
 顺序不能反：PC 的初始化函数若落进 `#else` 分支内部，预处理结构就散了。
 
 `Android.mk` 的 `SRC_DIRS` 用 wildcard 收集源码，`cn_extra/` 里的 `.c/.cpp` 会自动进构建，不需要改源文件列表。
+
+### 为什么 `configfile.c` 不进平台补丁（旧的 `0006` 已删）
+
+以前每个目标一份：`0005` 给 `android`、`0006` 给 `android-cn`。但把两份补丁逐行比一遍只有 **24 行差异**，且全部落在 `configfile.c` 的两个 hunk 上——加进去的 6 行**完全一样**，不同的只是上下文：
+
+```diff
+-    {.name = "touch_snap",     .type = ..., .boolValue = &configSnapTouch},
++    {.name = "touch_snap",     .type = ..., .boolValue = &configElementSnap},
+```
+
+也就是原版 Android 上游的 `configfile.c` 还停在旧版（`configSnapTouch`），汉化版 Android 已经跟到 `configElementSnap`。补丁没有错，错的是**为一处上下文漂移维护两份几乎相同的补丁**：上游每动一行就要重生成两份，还容易只改一份。
+
+改成幂等插入脚本 `scripts/add_cn_config.sh`（按锚点插、已存在则跳过、`--check` 只报告）。那 6 行本来就一模一样，插进去的自然也一模一样。已实测三棵树逐字节一致：
+
+| 场景 | 结果 |
+| --- | --- |
+| `android` 上游 + 脚本 | == 旧 `0005` 给出的 `configfile.c` 终态 |
+| `android-cn` 上游 + 脚本 | == 旧 `0006` 给出的终态 |
+| PC 基线 + 脚本 | == 本仓库 `src/src/pc/configfile.c`（PC 终态） |
+
+锚点：声明插在 `configLanguage[MAX_CONFIG_STRING]` 行**之后**，配置表条目插在 `{.name = "force_4by3"` 行**之前**。这两个子串在三份 `configfile.c` 里各只出现一次（脚本里用 `grep -F` 固定子串而不是正则——`\{` 在 BRE 里是区间开头，GNU grep 会直接报「不匹配的 \{」）。
+
+`configfile.c` 仍留在 `--exclude` 列表里（`0001` 在它上面的 hunk 上下文确实对不上），只是不再由补丁提供终态。
 
 ### 上游自带差异、但不进平台补丁
 
@@ -101,7 +121,7 @@ theirs = 本仓库 src/（PC 终态）
 | `Makefile` | `~L194` 加 `CN_TEXT_PACK`、`~L454` 加 flip guard | `~L470` 的 `SRC_DIRS` 行插 `src/pc/djui_modern` | 可应用（上下文不重叠） |
 | `Android.mk` | `~L106` 的 `LOCAL_CFLAGS` 后加 `SM64COOPDX_CN_TEXT` | `~L70` 的 `SRC_DIRS` 行插 `src/pc/djui_modern` | 可应用 |
 
-实测（基线取自 `upstream.txt`，桌面双向、Android 两个上游各一遍）：`0001`/`0002`/`0005`/`0006` 与 djui_modern 的 9 个桌面补丁、2 个 Android 构建补丁，**正向反向都干净应用，零冲突**。
+实测（基线取自 `upstream.txt`，桌面双向、Android 两个上游各一遍）：`0001`/`0002`/`0005` 与 djui_modern 的 9 个桌面补丁、2 个 Android 构建补丁，**正向反向都干净应用，零冲突**。
 
 **真正的问题不在补丁、而在缺文件**：`djui_modern_font_atlas.c` 里有一行
 
@@ -139,8 +159,8 @@ scripts/apply_patches.sh <pc|android|android-cn> <上游干净 checkout> [--fron
 | 目标 | 顺序 |
 | --- | --- |
 | `pc` | `0001` → [`0002`] → `cn_extra/`（补缺）→ `add_lang_strings.sh` |
-| `android` | `0001`（跳过 3 个漂移文件）→ `0005` → [`0002`] → `cn_extra/`（补缺）→ `add_lang_strings.sh` |
-| `android-cn` | `0001`（跳过 3 个漂移文件）→ `0006` → [`0002`] → `cn_extra/`（补缺）→ `add_lang_strings.sh` |
+| `android` | `0001`（跳过 3 个漂移文件）→ `0005` → [`0002`] → `cn_extra/`（补缺）→ `add_cn_config.sh` → `add_lang_strings.sh` |
+| `android-cn` | 同 `android`（**同一份** `0005`，只差上游自带文件） |
 
 `[]` 表示仅 `--frontend` 时应用。语言脚本**必须放在 `cn_extra/` 之后**：PC 的 `lang/Chinese.ini` 就是 `cn_extra/` 带过来的。**不要**用 `cp -R src/.` 覆盖终态——那会无条件带上前端，也会把 Android 的平台差异冲掉。
 
@@ -152,13 +172,13 @@ scripts/apply_patches.sh <pc|android|android-cn> <上游干净 checkout> [--fron
 # 1. 改动 src/ 后，重生成共用的 0001 / 0002
 sh scripts/gen_all_patches.sh <PC 8cd6e59 基线目录>
 
-# 2. 重生成 0005 / 0006（Android 上游 checkout 见 upstream.txt）
+# 2. 重生成 0005（Android 上游 checkout 见 upstream.txt）
 python3 scripts/gen_platform_patches.py \
     --pc-base    <PC 8cd6e59 基线目录> \
     --android    <ManIsCat2 上游目录> \
     --android-cn <汉化版 Android 上游目录>
 ```
 
-第 1 步会断言 `0001` 里既没有前端文件也没有 `lang/`，`0002` 只含那一个前端文件。第 2 步自检：`0001`（跳过 3 个漂移文件）+ 平台补丁 + `0002` + `add_lang_strings.sh` 叠加后与三方合并终态逐字节一致（`android` 28 文件 / `android-cn` 28 文件），语言字符串齐全，语言脚本复跑无改动（幂等），不应用 `0002` 时前端文件保持上游原版，平台补丁与 `0001` 不重叠。
+第 1 步会断言 `0001` 里既没有前端文件也没有 `lang/`，`0002` 只含那一个前端文件。第 2 步自检：`0001`（跳过 3 个漂移文件）+ 平台补丁 + `0002` + 两个插入脚本叠加后与三方合并终态逐字节一致（`android` / `android-cn` 各 27 文件），语言字符串齐全，两个脚本复跑无改动（幂等），不应用 `0002` 时前端文件保持上游原版，平台补丁与 `0001` 不重叠。**生成器会逐文件比对两个上游算出来的平台增量，一旦不同就直接报错**——那说明两个上游真的分道扬镳，得退回「每目标一份补丁」，而不是让共享补丁静默只对其中一个有效。
 
-语言字符串改了文案时不用重生成任何补丁，只改 `scripts/add_lang_strings.sh` 里的两处常量。
+语言字符串改了文案、或中文配置项改了名字时不用重生成任何补丁，只改 `scripts/add_lang_strings.sh` / `scripts/add_cn_config.sh` 里对应的常量。

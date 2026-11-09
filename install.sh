@@ -864,7 +864,7 @@ fi
 
 # ── 4. 本体补丁 ──────────────────────────────────────────────────────────────
 # 顺序与幂等性都由 apply_patches.sh 固化：
-#   0001 → 平台增量(0005/0006) → [0002] → cn_extra 补缺 → 语言字符串
+#   0001 → 平台增量(0005) → [0002] → cn_extra 补缺 → 配置项/语言字符串
 step "4/6 应用补丁"
 if [ "$ASK_FRONTEND" = yes ]; then
     sh "$repo/scripts/apply_patches.sh" "$TARGET" "$UPSTREAM_DIR" --frontend

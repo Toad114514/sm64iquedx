@@ -14,6 +14,9 @@
 
 </div>
 
+## 简介
+这是一个用于在 Super Ma
+
 ## 使用
 你必须拥有一个合法的《神游马力欧64》的 z64 decomp 副本，本仓库不包含 Rom。  
 Super Mario 64 (Ch) (iQue) \[\!\]：`29047fba820695bd14c5bd7aa1aa4400`  
@@ -77,9 +80,9 @@ Windows 目前仅有 Portable，打包为向导安装程序目前没有做
 本仓库只存「改动」不存上游全量源码：
 
 - `src/` —— 被改过的文件，**路径与上游逐级一致**（唯一编辑源）
-- `patches/` —— 4 份补丁**平铺**在此，不建子目录：`0001` 主补丁、`0002` 可选前端为四套上游共用，`0005`/`0006` 是两个 Android 平台增量；另有 `cn_extra/` 存放上游不存在的新增文件（只补缺、不覆盖）。语言字符串不是补丁，由 `scripts/add_lang_strings.sh` 在应用时按键插入
-- `platform/` ——  针对特殊平台的其他内容，例如 Debian 包所需的 control
-- `scripts/` —— 补丁生成脚本、语言字符串插入脚本 `add_lang_strings.sh`，以及幂等应用器 `apply_patches.sh`
+- `patches/` —— 补丁文件，但一部分没有做成补丁，微小更改被放在 `scripts/`
+- `platform/` ——  针对特殊平台的其他内容和打包，例如 Debian 包所需的 control
+- `scripts/` —— 补丁生成脚本和用于补丁后的小修补
 - `upstream.txt` —— 补丁基线（上游仓库 + commit）
 
 补丁索引与应用顺序见 [patches/README.md](patches/README.md)；改完 `src/` 用 `scripts/gen_all_patches.sh` 重生成共用补丁、`scripts/gen_platform_patches.py` 重生成 Android 补丁。不构建、只想手动叠加补丁时用 `scripts/apply_patches.sh <pc|android|android-cn> <上游目录> [--frontend]`，重复执行安全。约定详见 [docs/LAYOUT.md](docs/LAYOUT.md)。

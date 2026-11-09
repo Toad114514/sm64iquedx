@@ -3,14 +3,16 @@
 #
 #   scripts/apply_patches.sh <pc|android|android-cn> <上游根目录> [--frontend]
 #
-# 四套上游共用 0001 / 0002 / cn_extra/；Android 额外需要 0005 或 0006 平台补丁。
+# 四套上游共用 0001 / 0002 / cn_extra/；两个 Android 目标共用 0005 平台补丁。
 #
 # lang/*.ini 的改动既不在 0001 里、也不做成补丁：各上游的 ini 行号与自带条目
 # 都不同，做成补丁每个上游一份，量太大也不好维护。改由
 # scripts/add_lang_strings.sh 按键插入（已存在则跳过），四套上游共用一份。
+# src/pc/configfile.c 的中文配置项同理，由 scripts/add_cn_config.sh 插入。
 #
-# 0001 在 Android 上只需跳过 3 个上下文漂移文件（该列表必须与
+# 0001 在 Android 上跳过 3 个上下文漂移文件（该列表必须与
 # scripts/gen_platform_patches.py 的 EXCLUDED 一致，生成脚本会做一致性断言）。
+# 其中 Makefile / pc_main.c 由 0005 直接给出终态，configfile.c 由插入脚本补。
 #
 # 重复执行是安全的：已应用的补丁与已存在的字符串都会被识别并跳过。
 set -eu
@@ -47,8 +49,9 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 P="$root/patches"
 MAIN="$P/0001-src-overlay.patch"
 FRONT="$P/0002-djui-frontend.patch"
+# 两个 Android 上游共用同一份平台补丁：它们的 Makefile / pc_main.c / Android.mk
+# 内容完全相同，以前每目标一份只是上下文漂移（configSnapTouch vs configElementSnap）。
 PLAT_ANDROID="$P/0005-android.patch"
-PLAT_ANDROID_CN="$P/0006-android-cn.patch"
 
 platform=""
 case "$target" in
@@ -63,7 +66,7 @@ case "$target" in
             --exclude=src/pc/pc_main.c
         ;;
     android-cn)
-        platform="$PLAT_ANDROID_CN"
+        platform="$PLAT_ANDROID"
         set -- \
             --exclude=Makefile \
             --exclude=src/pc/configfile.c \
@@ -123,6 +126,13 @@ copy_extras() {
 }
 
 copy_extras
+
+# configfile.c 的中文配置项：0001 因为上下文漂移被 --exclude 掉了，这里补上。
+# （PC 目标不用管，0001 已经直接把它改好了）
+if [ "$target" != pc ]; then
+    echo "配置项:"
+    sh "$root/scripts/add_cn_config.sh" "$upstream"
+fi
 
 # 必须在 cn_extra 之后：PC 的 lang/Chinese.ini 就是 cn_extra 带过来的。
 echo "语言字符串:"

@@ -394,6 +394,45 @@ else
     no "aarch64：改名失败 → $(ls "$C/dist-arm" 2>/dev/null | tr '\n' ' ')"
 fi
 
+# C13: add_cn_config.sh —— configfile.c 的中文配置项从「每上游一份补丁」改成了
+#      插入脚本（旧的 0006 因此删掉），这里守住「插的位置对、且幂等、锚点缺失会报错」。
+cfg=$C/cfgprobe
+mkdir -p "$cfg/src/pc"
+cat > "$cfg/src/pc/configfile.c" <<'CFG'
+char         configLanguage[MAX_CONFIG_STRING]    = "";
+bool         configForce4By3                      = false;
+static const ConfigEntry table[] = {
+    {.name = "force_4by3",                     .type = CONFIG_TYPE_BOOL,   .boolValue   = &configForce4By3},
+};
+CFG
+cp "$cfg/src/pc/configfile.c" "$C/cfgprobe.orig"
+
+cfg_rc_a=0; sh "$repo/scripts/add_cn_config.sh" "$cfg" >/dev/null 2>&1 || cfg_rc_a=$?
+if [ "$cfg_rc_a" -eq 0 ] \
+   && [ "$(grep -c 'configChineseText' "$cfg/src/pc/configfile.c")" -eq 6 ] \
+   && [ "$(grep -n 'configLanguage\[MAX_CONFIG_STRING\]' "$cfg/src/pc/configfile.c" | cut -d: -f1)" = 1 ] \
+   && [ "$(grep -n 'configChineseText                    = true' "$cfg/src/pc/configfile.c" | cut -d: -f1)" = 2 ] \
+   && [ "$(grep -n '{.name = "chinese_text"' "$cfg/src/pc/configfile.c" | cut -d: -f1)" = 7 ] \
+   && [ "$(grep -n '{.name = "force_4by3"' "$cfg/src/pc/configfile.c" | cut -d: -f1)" = 10 ]; then
+    ok "add_cn_config：声明插在 configLanguage 之后、表项插在 force_4by3 之前"
+else
+    no "add_cn_config：插入位置不对（rc=${cfg_rc_a}）→ $(sed -n '1,12p' "$cfg/src/pc/configfile.c" | tr '\n' '|')"
+fi
+
+cfg_out=$(sh "$repo/scripts/add_cn_config.sh" "$cfg" 2>&1)
+printf '%s\n' "$cfg_out" | grep -q "已齐全" \
+    && ok "add_cn_config：重复执行幂等" \
+    || no "add_cn_config：复跑不幂等 → $cfg_out"
+
+# 只有声明、没有配置表锚点 → 必须报错，不能瞎猜位置
+mkdir -p "$C/cfgnoforce/src/pc"
+printf 'char         configLanguage[MAX_CONFIG_STRING]    = "";\n' > "$C/cfgnoforce/src/pc/configfile.c"
+cfg_rc_b=0
+sh "$repo/scripts/add_cn_config.sh" "$C/cfgnoforce" >/dev/null 2>&1 || cfg_rc_b=$?
+[ "$cfg_rc_b" -ne 0 ] \
+    && ok "add_cn_config：锚点缺失时非 0 退出（不猜位置）" \
+    || no "add_cn_config：锚点缺失却返回 0"
+
 say_section "D. 可移植性静态检查"
 
 # D1: `$var` 紧贴非 ASCII 字符时必须写成 `${var}`。
