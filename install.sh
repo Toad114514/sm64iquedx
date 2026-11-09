@@ -22,7 +22,7 @@ ASK_ANDROID=no          # yes = 只构建 Android APK，不构建桌面版
 ASK_CHINESE=no          # yes = 用汉化版上游（PC: cn-repo / Android: android-cn-repo）
 ASK_FRONTEND=no         # yes = 额外应用 0002（设置 → 其他 里的中文字库开关）
 ASK_DJUI=no             # yes = 应用 djui_modern 模块
-ASK_PACKAGE=            # 空/auto/deb/rpm/arch/mac/zip/other/no
+ASK_PACKAGE=            # 空/auto/deb/rpm/arch/mac/setup/zip/other/no
 WORK_DIR="$repo/build-iquedx"   # 上游 checkout 与中间文件（.gitignore 的 build-*/）
 UPSTREAM_DIR=""                 # 为空则 = $WORK_DIR/upstream
 DIST_DIR="$repo/dist"           # 成品目录，platform/* 的默认值也是这里
@@ -77,8 +77,9 @@ usage() {
   -d, --djmd             应用 djui_modern 模块（在打 0001 之前）
 
 成品打包（-a 时忽略）
-  -p, --package <方式>   auto | all | deb | rpm | arch | mac | zip | other | no
+  -p, --package <方式>   auto | all | deb | rpm | arch | mac | setup | zip | other | no
                          auto 按当前系统判断；all 打本机能打的全部格式
+                         setup Windows 安装向导（需要 Inno Setup 的 ISCC.exe）
                          zip 便携压缩包（解压即玩，任何系统都能打）
                          no 只留在 dist/；不写这个参数就不打包
 
@@ -520,6 +521,17 @@ do_package() {
             info "sh platform/darwin/mkmac.sh $DIST_DIR $VERSION"
             sh "$repo/platform/darwin/mkmac.sh" "$DIST_DIR" "$VERSION"
             ;;
+        setup)
+            step "打包 Windows 安装向导"
+            # ISCC.exe 是原生 Windows 程序，Linux/macOS 上没有，别给一句
+            # 「找不到 ISCC」让人去查工具链
+            case "$(uname -s)" in
+                MINGW*|MSYS*|CYGWIN*) ;;
+                *) die "安装向导只能在 Windows 上打（ISCC.exe 是 Windows 程序）；其他系统用 -p zip" ;;
+            esac
+            info "sh platform/windows/mkexe.sh $DIST_DIR $VERSION"
+            sh "$repo/platform/windows/mkexe.sh" "$DIST_DIR" "$VERSION"
+            ;;
         zip)
             step "打包便携 zip"
             info "sh platform/portable/mkzip.sh $DIST_DIR $VERSION"
@@ -533,7 +545,7 @@ do_package() {
             info "  sudo sh $repo/platform/freedesktop/install.sh"
             ;;
         *)
-            die "未知的打包方式：${p_way}（auto|all|deb|rpm|arch|mac|zip|other|no）"
+            die "未知的打包方式：${p_way}（auto|all|deb|rpm|arch|mac|setup|zip|other|no）"
             ;;
     esac
 }
@@ -552,7 +564,13 @@ package_all() {
             do_package mac
             ;;
         MINGW*|MSYS*|CYGWIN*)
-            # Windows 没有 deb/rpm/arch 那一套，只出便携 zip
+            # Windows 没有 deb/rpm/arch 那一套：装得上 Inno Setup 就出安装向导，
+            # 否则只出便携 zip（和缺 dpkg-deb 时跳过 .deb 是同一个态度）
+            if sh "$repo/platform/windows/mkexe.sh" --check >/dev/null 2>&1; then
+                do_package setup
+            else
+                warn "找不到 ISCC.exe（Inno Setup），跳过安装向导"
+            fi
             ;;
         *)
             if command -v dpkg-deb >/dev/null 2>&1; then
@@ -621,7 +639,7 @@ welcome_ask() {
 
     if [ "$ASK_ANDROID" = no ]; then
         say ""
-        say "打包方式：auto（按系统）/ deb / rpm / arch / mac / other（只留 dist）/ no"
+        say "打包方式：auto（按系统）/ deb / rpm / arch / mac / setup（Windows 安装向导）/ zip / other（只留 dist）/ no"
         printf '打包方式 [auto]: '
         IFS= read -r reply_pkg || reply_pkg=""
         [ -z "$reply_pkg" ] && reply_pkg=auto
@@ -694,8 +712,8 @@ if [ -z "$VERSION" ]; then
 fi
 
 case "$ASK_PACKAGE" in
-    ""|auto|all|deb|rpm|arch|mac|zip|other|no) ;;
-    *) die "--package 只接受 auto|all|deb|rpm|arch|mac|zip|other|no，收到：$ASK_PACKAGE" ;;
+    ""|auto|all|deb|rpm|arch|mac|setup|zip|other|no) ;;
+    *) die "--package 只接受 auto|all|deb|rpm|arch|mac|setup|zip|other|no，收到：$ASK_PACKAGE" ;;
 esac
 
 # 没有参数：有终端就进向导，没有终端（CI）就按默认值直走

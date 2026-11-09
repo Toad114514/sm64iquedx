@@ -195,7 +195,7 @@ chmod +x "$S/bin/git" "$S/bin/make" "$S/bin/gmake" \
 # 于是「缺工具只警告」的用例会因为「脚本不存在」而假失败。
 mkdir -p "$C/scripts" "$C/patches" "$C/platform/pacman" \
          "$C/platform/DEBIAN" "$C/platform/rpm" "$C/platform/darwin" \
-         "$C/platform/portable"
+         "$C/platform/portable" "$C/platform/windows"
 cp "$repo/install.sh" "$repo/upstream.txt" "$C/"
 cat > "$C/scripts/apply_patches.sh" <<'STUB'
 #!/bin/sh
@@ -206,6 +206,10 @@ printf '#!/bin/sh\necho "[stub mkrpm] $*"\n'  > "$C/platform/rpm/mkrpm.sh"
 printf '#!/bin/sh\necho "[stub mkmac] $*"\n'  > "$C/platform/darwin/mkmac.sh"
 # 便携 zip 用真脚本（逻辑就是调用 zip，桩 zip 足够）
 cp "$repo/platform/portable/mkzip.sh" "$C/platform/portable/mkzip.sh"
+# 安装向导也用真脚本 + 真 .iss：Windows CI 上 `-p all` 要真跑它，
+# 其它平台上它只在 `-p setup` 用例里被「平台不对」提前挡住。
+cp "$repo/platform/windows/mkexe.sh" "$repo/platform/windows/sm64coopdx-iquedx.iss" \
+   "$C/platform/windows/"
 chmod +x "$C/platform/DEBIAN/mkdeb.sh" "$C/platform/rpm/mkrpm.sh" \
          "$C/platform/darwin/mkmac.sh"
 
@@ -465,6 +469,95 @@ cfg_run "$C/cfgnoforce" >/dev/null 2>&1 || cfg_rc_b=$?
 [ "$cfg_rc_b" -ne 0 ] \
     && ok "add_cn_config：锚点缺失时非 0 退出（不猜位置）" \
     || no "add_cn_config：锚点缺失却返回 0"
+
+# C14: mkexe.sh（Windows 安装向导）。ISCC.exe 只有 Windows 上有，CI 的 Linux/macOS
+#      job 也得能验，所以用桩脚本；临时树完整复制了 repo 的形状（mkexe.sh 按
+#      `$(dirname $0)/../..` 找仓库根），setup.exe 落在临时树里，不往真仓库扔垃圾。
+mkroot=$C/fakerepo
+mkdir -p "$mkroot/platform/windows" "$mkroot/dist"
+cp "$repo/platform/windows/mkexe.sh" "$mkroot/platform/windows/"
+cp "$repo/platform/windows/sm64coopdx-iquedx.iss" "$mkroot/platform/windows/"
+printf 'version = 9.9.9\n' > "$mkroot/upstream.txt"
+printf 'stub\n' > "$mkroot/dist/sm64coopdx.exe"
+
+fiscc=$C/fake-iscc
+cat > "$fiscc" <<'FAKE'
+#!/bin/sh
+# 桩 ISCC：把收到的每个参数单独记一行，按调用方指定的路径假装产出 setup.exe
+printf '%s\n' "$@" > "$ISCC_ARGS_OUT"
+[ -n "${FAKE_SETUP_OUT:-}" ] && : > "$FAKE_SETUP_OUT"
+exit 0
+FAKE
+chmod +x "$fiscc"
+
+# 安装脚本的 .iss 必须带 UTF-8 BOM，否则中文界面会按 ANSI 解成乱码
+if [ "$(head -c 3 "$repo/platform/windows/sm64coopdx-iquedx.iss" | od -An -tx1 | tr -d ' \n')" = "efbbbf" ]; then
+    ok "安装脚本是 UTF-8 带 BOM（Inno Setup 才不会把中文当 ANSI）"
+else
+    no "安装脚本丢了 UTF-8 BOM，装出来的向导中文会乱码"
+fi
+
+mk_out=$mkroot/sm64iquedx-9.9.9-windows-$(uname -m)-setup.exe
+mk_rc=0
+ISCC="$fiscc" ISCC_ARGS_OUT="$C/iscc.args" FAKE_SETUP_OUT="$mk_out" \
+    sh "$mkroot/platform/windows/mkexe.sh" "$mkroot/dist" >/dev/null 2>&1 || mk_rc=$?
+if [ "$mk_rc" -eq 0 ] \
+   && [ -f "$mk_out" ] \
+   && grep -qxF '/DWithChinese=0' "$C/iscc.args" \
+   && grep -qxF '/DMyAppVersion=9.9.9' "$C/iscc.args" \
+   && grep -qF 'MySourceDir=' "$C/iscc.args" \
+   && grep -qF 'sm64coopdx-iquedx.iss' "$C/iscc.args"; then
+    ok "mkexe：版本从 upstream.txt 读、源目录与 iss 都传给了 ISCC"
+else
+    no "mkexe 参数不对（rc=${mk_rc}）→ $(tr '\n' '|' < "$C/iscc.args" 2>/dev/null)"
+fi
+
+# 没有 ISCC 必须明确报错，不能打出一个空壳安装包
+mk_rc2=0
+ISCC=/nonexistent/ISCC.exe sh "$mkroot/platform/windows/mkexe.sh" "$mkroot/dist" \
+    >"$C/mkerr" 2>&1 || mk_rc2=$?
+if [ "$mk_rc2" -ne 0 ] && grep -qF 'Inno Setup' "$C/mkerr"; then
+    ok "mkexe：找不到 ISCC 时非 0 退出并提示装 Inno Setup"
+else
+    no "mkexe：没有 ISCC 却返回 ${mk_rc2} → $(tr '\n' '|' < "$C/mkerr")"
+fi
+
+# 成品目录里没有主程序 → 同样是「前置条件不满足」，不能当成功
+mkdir -p "$C/mkempty"
+mk_rc3=0
+ISCC="$fiscc" ISCC_ARGS_OUT="$C/iscc3.args" FAKE_SETUP_OUT=/dev/null \
+    sh "$mkroot/platform/windows/mkexe.sh" "$C/mkempty" >/dev/null 2>&1 || mk_rc3=$?
+[ "$mk_rc3" -ne 0 ] \
+    && ok "mkexe：成品目录没有 sm64coopdx.exe 时非 0 退出" \
+    || no "mkexe：没有主程序却返回 0"
+
+# 编译器目录里有简体中文语言文件时，应该把中文界面开关传过去
+mkdir -p "$C/Languages" && : > "$C/Languages/ChineseSimplified.isl"
+mk_rc4=0
+ISCC="$fiscc" ISCC_ARGS_OUT="$C/iscc4.args" FAKE_SETUP_OUT="$mk_out" \
+    sh "$mkroot/platform/windows/mkexe.sh" "$mkroot/dist" >/dev/null 2>&1 || mk_rc4=$?
+if [ "$mk_rc4" -eq 0 ] && grep -qxF '/DWithChinese=1' "$C/iscc4.args"; then
+    ok "mkexe：编译器带 ChineseSimplified.isl 时传中文界面开关"
+else
+    no "mkexe：没传中文界面开关（rc=${mk_rc4}）→ $(tr '\n' '|' < "$C/iscc4.args" 2>/dev/null)"
+fi
+
+# C15: `-p setup` 在非 Windows 上必须明确拒绝，别静默打出一个空壳安装包
+su_rc=0
+su_out=$(run_tree -po -p setup --path "$C/up-arm" --dist "$C/dist-setup") || su_rc=$?
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        # Windows 上成品里只有 sm64coopdx、没有 .exe，mkexe.sh 会拒绝
+        [ "$su_rc" -ne 0 ] \
+            && ok "setup：Windows 上成品缺 sm64coopdx.exe 时非 0 退出" \
+            || no "setup：成品缺主程序却返回 0" ;;
+    *)
+        if [ "$su_rc" -ne 0 ] && printf '%s' "$su_out" | grep -qF '只能在 Windows 上打'; then
+            ok "setup：非 Windows 上明确拒绝（提示改用 -p zip）"
+        else
+            no "setup：非 Windows 上 rc=${su_rc} → $(printf '%s' "$su_out" | tr '\n' '|')"
+        fi ;;
+esac
 
 say_section "D. 可移植性静态检查"
 

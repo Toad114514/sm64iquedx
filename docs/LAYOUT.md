@@ -146,7 +146,7 @@ scripts/apply_patches.sh <pc|android|android-cn> <上游干净 checkout> [--fron
 
 按平台 / 发行包分目录，放与具体构建环境相关的补丁或脚本。
 
-> `install.sh` 在第 6 步按 `--package`（或向导里的选择）调用这里：`deb` → `DEBIAN/mkdeb.sh`、`rpm` → `rpm/mkrpm.sh`、`arch` → 在 `pacman/` 里跑 `makepkg`、`mac` → `darwin/mkmac.sh`、`other` → 只打印安装命令（`freedesktop/install.sh`）。
+> `install.sh` 在第 6 步按 `--package`（或向导里的选择）调用这里：`deb` → `DEBIAN/mkdeb.sh`、`rpm` → `rpm/mkrpm.sh`、`arch` → 在 `pacman/` 里跑 `makepkg`、`mac` → `darwin/mkmac.sh`、`setup` → `windows/mkexe.sh`、`zip` → `portable/mkzip.sh`、`other` → 只打印安装命令（`freedesktop/install.sh`）。
 
 | 目录 | 内容 | 说明 |
 | --- | --- | --- |
@@ -156,6 +156,7 @@ scripts/apply_patches.sh <pc|android|android-cn> <上游干净 checkout> [--fron
 | `platform/darwin/` | `Info.plist.in` + `mkmac.sh` | macOS 的 `.app` / `.dmg` / `.pkg` / `.zip` |
 | `platform/freedesktop/` | `*.desktop` + 图标 + `install.sh` | 非打包发行版共用：启动器与图标 |
 | `platform/portable/` | `mkzip.sh` | 便携 zip（三平台通用，解压即玩） |
+| `platform/windows/` | `sm64coopdx-iquedx.iss` + `mkexe.sh` | Inno Setup 安装向导（`setup.exe`），只能在 Windows 上打 |
 
 ### platform/DEBIAN
 
@@ -229,6 +230,27 @@ DESTDIR=/tmp/stage sh platform/freedesktop/install.sh <目录>   # 装进 stagin
 
 `Exec=` 会按真实安装路径重写；`Icon=sm64coopdx-iquedx` 依赖同时安装的同名 PNG。
 
+### platform/windows
+
+Inno Setup 的安装向导：成品目录整个装进 `{app}`，带开始菜单/桌面快捷方式、卸载程序和
+可选的中文界面。
+
+```sh
+sh platform/windows/mkexe.sh                          # 成品取 <仓库根>/dist，版本读 upstream.txt
+sh platform/windows/mkexe.sh <成品目录> <版本>
+sh platform/windows/mkexe.sh --check                  # 只探测 ISCC 在不在（install.sh 用）
+```
+
+- 只能 Windows 上跑：`ISCC.exe` 是原生 Windows 程序，Linux/macOS 没有。其它系统用 `-p zip`。
+- 找 ISCC 的顺序是 `$ISCC` → `PATH` → Inno Setup 6 的默认安装位置，默认路径里有空格和括号，
+  所以是逐条判断、不拼接。
+- `.iss` 必须是 **UTF-8 带 BOM**：Inno Setup 6 只在看到 BOM 时才按 UTF-8 解析，
+  否则中文界面全变乱码，而且**编译不报错**。`mkexe.sh` 会查首三个字节，自测里也有一条守着。
+- 传参用 `/DMyAppVersion` / `/DMySourceDir` / `/DMyOutputDir`。路径要先用 `cygpath -w` 转成
+  Windows 形式，否则 ISCC 会把 `/c/...` 当成命令行开关。
+- `Languages\ChineseSimplified.isl` 由 shell 探测后以 `/DWithChinese=1` 传入，缺了退回英文界面，
+  不用 ISPP 的预定义变量（那个名字各版本不一致）。
+
 
 ## GitHub Actions
 
@@ -238,7 +260,7 @@ DESTDIR=/tmp/stage sh platform/freedesktop/install.sh <目录>   # 装进 stagin
 | --- | --- | --- |
 | `linux`（`ubuntu-22.04`） | `-c -f -d` | x86_64。先 `-p no` 只编译，再用 `install.sh -po -p all --path build-iquedx/upstream` 出 `.deb` / `.rpm` / 便携 zip；Arch 包进 `archlinux:latest` 容器跑 `makepkg` |
 | `linux-arm`（`ubuntu-22.04-arm`） | `-c -f -d` | aarch64，只出 `.deb` / pacman / 便携 zip（不装 rpm，`-p all` 会跳过并警告）；Arch 包进 `menci/archlinuxarm:base-devel`（官方 archlinux 镜像只有 x86_64） |
-| `windows`（`windows-latest`） | `-c -f -d` | MSYS2 mingw64，只出便携 zip |
+| `windows`（`windows-latest`） | `-c -f -d` | MSYS2 mingw64，出 Inno Setup 安装向导（`*-setup.exe`）+ 便携 zip。Inno 用 `choco install innosetup` 装，`ISCC` 的路径写进 `GITHUB_ENV`；找不到就只警告跳过向导，zip 照出 |
 | `macos`（矩阵：`macos-latest` / `macos-15-intel`） | `-c -f -d` | arm64 与 x86_64 各出一份 dmg + 便携 zip；编译后多一步「`.app` 不能链回 brew」的自包含检查 |
 | `android`（`ubuntu-22.04`） | `-a -c -f -d` | SDK 33 / build-tools 33.0.2；`install.sh` 内部先 `make TOUCH_CONTROLS=1` 生成资源再 `gradle assembleRelease`，之后用上游自带 `platform/android/{key.pk8,certificate.pem}` 签名并上传 |
 

@@ -52,7 +52,7 @@ sh ./install.sh -d -f -p mac              # 带 djui_modern，出 .app / .dmg
 sh ./install.sh -a -c                     # 只构建 Android 汉化版 APK
 ```
 
-可用的所有参数：
+可用的部分参数：
 
 | 参数 | 作用 |
 | --- | --- |
@@ -69,9 +69,8 @@ sh ./install.sh -a -c                     # 只构建 Android 汉化版 APK
   - 本来想提交到 AUR 的，最近不给注册开放，所以目前还不能 `yay -S sm64coopdx-iquedx`
 - 红帽系 / openSUSE → 生成 `sm64coopdx-iquedx-<版本>-<rel>.<架构>.rpm`
 - macOS → 生成 `SM64CoopDeluxe.app`，默认再包一层 `.dmg`
-- 其他 Linux / Unix → `--package other` 只提示安装命令，本体默认存储在 `/opt/sm64coopdx-iquedx`
-
-Windows 目前仅有 Portable，打包为向导安装程序目前没有做
+- Windows → 生成 `sm64coopdx-iquedx-<版本>-setup.exe` 安装向导 exe 文件 `InnoSetup Powered`
+- 其他 Linux / Unix / 乱七八糟的平台 → `--package other` 只提示安装命令，本体默认存储在 `/opt/sm64coopdx-iquedx`
 
 也可以 fork 后用 GitHub Actions 自己编译，或到上善若的汉化群 https://qm.qq.com/q/twjhRVjgWs 找我要成品 *（为控制国内马里奥圈小鬼数量不直接发布）*。
 

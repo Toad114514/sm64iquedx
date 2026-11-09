@@ -5,7 +5,7 @@ name: Build
 #
 #   linux       ubuntu-22.04       x86_64  → deb / rpm / arch / portable-zip
 #   linux-arm   ubuntu-22.04-arm   aarch64 → deb / arch / portable-zip（不出 rpm）
-#   windows     windows-latest     x86_64  → portable-zip
+#   windows     windows-latest     x86_64  → setup.exe / portable-zip
 #   macos       macos-latest       arm64   → dmg / portable-zip
 #             + macos-15-intel     x86_64  → dmg / portable-zip
 #   android     ubuntu-22.04       arm64-v8a / x86_64 → apk
@@ -258,7 +258,7 @@ jobs:
 
   # ── Windows ─────────────────────────────────────────────────────────────────
   windows:
-    name: Windows (zip)
+    name: Windows (setup.exe / zip)
     runs-on: windows-latest
     defaults:
       run:
@@ -281,6 +281,21 @@ jobs:
             mingw-w64-x86_64-glew
             mingw-w64-x86_64-SDL2
 
+      - name: 安装 Inno Setup（打安装向导用）
+        # 这个 job 的默认 shell 是 msys2，choco 得单独用 pwsh 跑
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          # Inno Setup 6 的默认安装位置；choco 静默安装不会改它
+          $iscc = "C:/Program Files (x86)/Inno Setup 6/ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "装完找不到 $iscc" }
+          # 用正斜杠：msys2 里的 mkexe.sh 用 [ -f ] 判断，两种都能认，
+          # 但正斜杠在两边都不需要转义。
+          # 编码用 ascii：PS 5.1 的 utf8 会写 BOM，$GITHUB_ENV 第一行带 BOM 时
+          # 变量名会变成 "\ufeffISCC"，后面就取不到了。
+          "ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+          Write-Host "ISCC = $iscc"
+
       - name: 参数自测（离线）
         run: sh scripts/test_install_args.sh
 
@@ -290,8 +305,25 @@ jobs:
           echo "  上游=$IQDX_CHINESE  前端=$IQDX_FRONTEND  djui_modern=$IQDX_DJUI"
           sh install.sh ${IQDX_BUILD_ARGS} -p no
 
-      - name: 打包（Windows 不出安装包，只整理成品目录）
+      # -p all 在 Windows 上出两样：Inno Setup 安装向导 + 便携 zip。
+      # 万一 ISCC 没找到，setup 分支只警告、zip 照出，不会整步失败。
+      - name: 打包（安装向导 + 便携 zip）
         run: sh install.sh -po -p all --path build-iquedx/upstream
+
+      - name: 列出产物
+        run: |
+          ls -la dist | head -20 || true
+          ls -la ./*.exe ./*.zip 2>/dev/null || true
+
+      - name: 上传安装向导（setup.exe）
+        uses: actions/upload-artifact@v4
+        with:
+          name: sm64iquedx-windows-x86_64-setup
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            *-setup.exe
+            dist/*-setup.exe
 
       - name: 上传便携 zip
         uses: actions/upload-artifact@v4
