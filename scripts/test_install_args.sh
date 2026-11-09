@@ -155,7 +155,10 @@ esac
 exit 0
 STUB
 
-# 桩 make：只造出运行期文件
+# 桩 make：只造出运行期文件。
+# Windows 上真实产物是 sm64coopdx.exe，`-p all` 会接着打安装向导，而 mkexe.sh
+# 要求 dist 里有 sm64coopdx.exe —— 桩里也必须造出同名文件，否则 Windows 上
+# 自测会在「打包 Windows 安装向导」阶段失败（那是桩不对，不是包不对）。
 cat > "$S/bin/make" <<'STUB'
 #!/bin/sh
 b=build/us_pc
@@ -163,6 +166,12 @@ mkdir -p "$b/lang" "$b/mods" "$b/dynos" "$b/palettes"
 printf '#!/bin/sh\necho stub\n' > "$b/sm64coopdx"; chmod +x "$b/sm64coopdx"
 printf 'stub\n' > "$b/coopdx_updater"
 : > "$b/libdiscord_game_sdk.so"
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        printf 'stub\n' > "$b/sm64coopdx.exe"
+        printf 'stub\n' > "$b/coopdx_updater.exe"
+        ;;
+esac
 STUB
 cp "$S/bin/make" "$S/bin/gmake"
 # 桩 makepkg / dpkg-deb / rpmbuild：让 -p all 的三条分支在任何机器上都走同一条路径
@@ -212,6 +221,18 @@ cp "$repo/platform/windows/mkexe.sh" "$repo/platform/windows/sm64coopdx-iquedx.i
    "$C/platform/windows/"
 chmod +x "$C/platform/DEBIAN/mkdeb.sh" "$C/platform/rpm/mkrpm.sh" \
          "$C/platform/darwin/mkmac.sh"
+
+# 桩 ISCC（Inno Setup 编译器）。ISCC.exe 只有 Windows 上有，而 Windows 上的
+# `-p all` 会真的去调它 —— 不注入桩的话自测会编译一遍真安装包（慢、还依赖
+# 那台机器的 Inno 版本）。桩只记参数，并按 $FAKE_SETUP_OUT 假装产出 setup.exe。
+fiscc=$C/fake-iscc
+cat > "$fiscc" <<'FAKE'
+#!/bin/sh
+printf '%s\n' "$@" > "${ISCC_ARGS_OUT:-/dev/null}"
+[ -n "${FAKE_SETUP_OUT:-}" ] && : > "$FAKE_SETUP_OUT"
+exit 0
+FAKE
+chmod +x "$fiscc"
 
 # 「工具缺失」场景用的 PATH（只在 Linux 分支用到，见 C9b）：把当前 PATH 里
 # 除 dpkg-deb/rpmbuild/makepkg 之外的可执行文件全部软链到一个目录，只用它当 PATH。
@@ -316,17 +337,30 @@ case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*) os_kind=win ;;
 esac
 
-out=$(run_tree -po -p all --path "$C/up")
-all_rc=$?
+if [ "$os_kind" = win ]; then
+    # Windows 上 `-p all` 会真的调 ISCC ⇒ 必须注入桩，否则自测会编译一遍真安装包
+    win_ver=$(sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*//p' "$C/upstream.txt" \
+              | head -n 1 | tr -d '\r')
+    [ -n "$win_ver" ] || win_ver=1.5.1
+    win_setup=$C/sm64iquedx-${win_ver}-windows-$(uname -m)-setup.exe
+    out=$( ISCC="$fiscc" ISCC_ARGS_OUT="$C/iscc-all.args" FAKE_SETUP_OUT="$win_setup" \
+           run_tree -po -p all --path "$C/up" )
+    all_rc=$?
+else
+    out=$(run_tree -po -p all --path "$C/up")
+    all_rc=$?
+fi
 case "$os_kind" in
     win)
-        # Windows 没有 deb/rpm/arch，只出便携 zip
         if [ "$all_rc" -eq 0 ] \
+           && printf '%s\n' "$out" | grep -q "打包 Windows 安装向导" \
+           && [ -f "$win_setup" ] \
+           && grep -qF '/DMyAppVersion=' "$C/iscc-all.args" \
            && printf '%s\n' "$out" | grep -q "打包便携 zip" \
            && printf '%s\n' "$out" | grep -q "stub zip"; then
-            ok "-p all（Windows）：只出便携 zip"
+            ok "-p all（Windows）：安装向导 + 便携 zip"
         else
-            no "-p all（Windows）：rc=$all_rc → $(printf '%s\n' "$out" | grep -E '打包|stub' | tr '\n' ' ')"
+            no "-p all（Windows）：rc=$all_rc → $(printf '%s\n' "$out" | grep -E '打包|stub|\[x\]|ISCC|成品' | tr '\n' ' ')"
         fi
         ;;
     mac)
@@ -471,24 +505,15 @@ cfg_run "$C/cfgnoforce" >/dev/null 2>&1 || cfg_rc_b=$?
     || no "add_cn_config：锚点缺失却返回 0"
 
 # C14: mkexe.sh（Windows 安装向导）。ISCC.exe 只有 Windows 上有，CI 的 Linux/macOS
-#      job 也得能验，所以用桩脚本；临时树完整复制了 repo 的形状（mkexe.sh 按
-#      `$(dirname $0)/../..` 找仓库根），setup.exe 落在临时树里，不往真仓库扔垃圾。
+#      job 也得能验，所以用桩脚本（${fiscc}，见上）；临时树完整复制了 repo 的形状
+#      （mkexe.sh 按 `$(dirname $0)/../..` 找仓库根），setup.exe 落在临时树里，
+#      不往真仓库扔垃圾。
 mkroot=$C/fakerepo
 mkdir -p "$mkroot/platform/windows" "$mkroot/dist"
 cp "$repo/platform/windows/mkexe.sh" "$mkroot/platform/windows/"
 cp "$repo/platform/windows/sm64coopdx-iquedx.iss" "$mkroot/platform/windows/"
 printf 'version = 9.9.9\n' > "$mkroot/upstream.txt"
 printf 'stub\n' > "$mkroot/dist/sm64coopdx.exe"
-
-fiscc=$C/fake-iscc
-cat > "$fiscc" <<'FAKE'
-#!/bin/sh
-# 桩 ISCC：把收到的每个参数单独记一行，按调用方指定的路径假装产出 setup.exe
-printf '%s\n' "$@" > "$ISCC_ARGS_OUT"
-[ -n "${FAKE_SETUP_OUT:-}" ] && : > "$FAKE_SETUP_OUT"
-exit 0
-FAKE
-chmod +x "$fiscc"
 
 # 安装脚本的 .iss 必须带 UTF-8 BOM，否则中文界面会按 ANSI 解成乱码
 if [ "$(head -c 3 "$repo/platform/windows/sm64coopdx-iquedx.iss" | od -An -tx1 | tr -d ' \n')" = "efbbbf" ]; then
@@ -544,13 +569,17 @@ fi
 
 # C15: `-p setup` 在非 Windows 上必须明确拒绝，别静默打出一个空壳安装包
 su_rc=0
-su_out=$(run_tree -po -p setup --path "$C/up-arm" --dist "$C/dist-setup") || su_rc=$?
+su_out=$( ISCC="$fiscc" ISCC_ARGS_OUT="$C/iscc5.args" \
+          run_tree -po -p setup --path "$C/up-arm" --dist "$C/dist-setup" ) || su_rc=$?
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
-        # Windows 上成品里只有 sm64coopdx、没有 .exe，mkexe.sh 会拒绝
-        [ "$su_rc" -ne 0 ] \
-            && ok "setup：Windows 上成品缺 sm64coopdx.exe 时非 0 退出" \
-            || no "setup：成品缺主程序却返回 0" ;;
+        # 注入桩 ISCC 后，失败点必须落在「成品里没有 sm64coopdx.exe」上，
+        # 否则这条用例只是在验「这台机器没装 Inno」，不是验我们的检查。
+        if [ "$su_rc" -ne 0 ] && printf '%s' "$su_out" | grep -qF 'sm64coopdx.exe'; then
+            ok "setup：Windows 上成品缺 sm64coopdx.exe 时非 0 退出"
+        else
+            no "setup：rc=${su_rc} → $(printf '%s' "$su_out" | grep -E '\[x\]|sm64coopdx' | tr '\n' '|')"
+        fi ;;
     *)
         if [ "$su_rc" -ne 0 ] && printf '%s' "$su_out" | grep -qF '只能在 Windows 上打'; then
             ok "setup：非 Windows 上明确拒绝（提示改用 -p zip）"
