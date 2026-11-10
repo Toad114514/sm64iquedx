@@ -83,7 +83,7 @@
 +# NOTE: the CN sources are listed as prerequisites so that editing the
 +# generated iQue text (rather than the template) still regenerates the
 +# preprocessed output. Without this the build silently keeps a stale copy.
-+CN_TEXT_DEPS := $(wildcard text/cn_dialogs_cn.inc.c text/cn_courses_cn.inc.c text/cn_labels.inc.c)
++CN_TEXT_DEPS := $(wildcard text/cn_dialogs_cn.inc.c text/cn_labels.inc.c)
 +$(BUILD_DIR)/text/%/define_courses.inc.c: text/define_courses.inc.c text/%/courses.h $(CN_TEXT_DEPS)
  	@$(PRINT) "$(GREEN)Preprocessing: $(BLUE)$@ $(NO_COL)\n"
  	$(V)$(CPP) $(PROF_FLAGS) $(CPPFLAGS) $< -o - -I text/$*/ | $(TEXTCONV) charmap.txt - $@
@@ -94,7 +94,16 @@
  
 --- a/src/pc/pc_main.c
 +++ b/src/pc/pc_main.c
-@@ -50,6 +50,7 @@
+@@ -23,6 +23,8 @@
+ 
+ #include "rom_assets.h"
+ #include "rom_checker.h"
++#include "cn_text_gate.h"
++#include "game/cn_rom_assets.h"
+ #include "pc_main.h"
+ #include "loading.h"
+ #include "cliopts.h"
+@@ -50,6 +52,7 @@
  #include "pc/djui/djui.h"
  #include "pc/djui/djui_unicode.h"
  #include "pc/djui/djui_panel.h"
@@ -102,7 +111,7 @@
  #include "pc/djui/djui_panel_modlist.h"
  #include "pc/djui/djui_ctx_display.h"
  #include "pc/djui/djui_fps_display.h"
-@@ -63,6 +64,7 @@
+@@ -63,6 +66,7 @@
  
  #include "gfx_dimensions.h"
  #include "game/segment2.h"
@@ -110,61 +119,83 @@
  
  #include "engine/math_util.h"
  
-@@ -510,6 +512,73 @@
+@@ -510,6 +514,95 @@
      return NULL;
  }
  
 +#if defined(SM64COOPDX_CN_TEXT)
 +// Called once the vanilla rom has been imported and DJUI is up.
 +//
-+// There is deliberately no confirmation box: the answer is derived from what
-+// the player actually owns.
++// Nothing about the pack is compiled in: the glyphs, the dialog text, the
++// course/act names and the localised textures are all read out of the player's
++// own 神游 dump at startup (cn_rom_assets.c). Owning the cartridge is therefore
++// no longer a condition we merely *check* -- without it there are no pixels and
++// no strings, so the pack cannot be shown at all.
 +//
-+//   * the exact 神游 (iQue) rom dump is present -> switch the Chinese pack on
-+//   * it is not present                        -> leave it off
++//   * the exact 神游 (iQue) rom dump is present -> default on, and the player
++//     may switch it off by hand (that choice then wins over detection in both
++//     directions, otherwise unchecking the box would silently undo itself on
++//     the next start)
++//   * it is not present -> off for this session, the settings checkbox is
++//     greyed out, and a hint explains why (djui_panel_misc.c)
 +//
-+// The rom is only a *signal* here -- the engine still runs on the US image and
-+// the pack data is compiled in -- but it is a decisive one. Someone who owns
-+// the Chinese release wants Chinese text; someone who does not should not be
-+// handed text lifted from a cartridge they never supplied. Asking a question
-+// whose answer we can already read off the filesystem was pure friction.
++// The gate is deliberately unconditional: a config written by an older build
++// can carry configChineseText = true on a machine that never supplied the rom,
++// and the pack must not light up just because configChineseTextUserSet was set
++// once. The stored value is not rewritten (see below) -- only the live state is.
 +//
-+// The switch is not forced on every launch, though: clicking 设置 → 其他 →
-+// 中文字库(神游) sets configChineseTextUserSet, and from then on the player's
-+// choice wins over detection in both directions -- otherwise unchecking the
-+// box would silently undo itself on the next start.
-+//
-+// Note for configs written by an older build: there, configChineseTextPrompted
-+// could only become true by answering the old box, and that answer is now
-+// re-derived once from detection (owning the rom means "on"). The first manual
-+// toggle is enough to make the choice stick again.
++// Note for configs written by an older build: configChineseTextPrompted could
++// only become true by answering the old first-run box; that answer is now
++// re-derived from detection (owning the rom means "on").
 +static void chinese_text_pack_init(void) {
 +    bool const detected = rom_checker_ique_rom_present();
-+    bool const adopt    = !configChineseTextUserSet;
 +
-+    if (adopt && (configChineseText != detected || !configChineseTextPrompted)) {
-+        configChineseText         = detected;
-+        configChineseTextPrompted = true;
++    // The pack is no longer compiled into the binary: every glyph, dialog
++    // string and localised texture is read out of the player's own 神游 dump at
++    // startup (cn_rom_assets.c). Owning the cartridge is therefore no longer a
++    // precondition we merely *check* -- without it there is no data to show.
++    bool const loaded = detected && cn_rom_assets_load(rom_checker_ique_rom_path());
 +
-+        // rom_assets_load() already applied the texture overlay (power meter
-+        // 「力量」, title wordmark, COURSE sign) using the *old* value, so
-+        // re-apply it or the art and the text end up from different sets.
-+        cn_tex_apply(detected);
++    // No rom / unreadable rom -> off, no matter what the config says. With the
++    // rom -> the player's manual choice if there is one, otherwise on. The rule
++    // itself lives in cn_text_gate.h so it can be tested on its own.
++    bool const target = cn_text_pack_target(loaded, configChineseTextUserSet, configChineseText);
++
++    // configChineseText is deliberately left as the player wrote it. A missing
++    // dump only means "not this session": storing false here would make one
++    // launch with the cartridge in an unscanned folder (a phone, a second
++    // drive) silently permanent, and the player would have no way back short of
++    // toggling the box while the dump is nowhere to be found.
++    //
++    // Everything that decides *what to draw* goes through gCnTextPackActive or
++    // through cn_text_pack_target() again (rom_assets.c does the latter), so the
++    // config value is never mistaken for the live one.
++    bool const needSave = !configChineseTextPrompted;
++    configChineseTextPrompted = true;
++
++    gCnTextPackActive = target ? 1 : 0;
++    apply_cn_text_pack();
++
++    if (needSave) {
 +        configfile_save(configfile_name());
 +    }
 +
-+    gCnTextPackActive = configChineseText ? 1 : 0;
-+    apply_cn_text_pack();
-+
-+    LOG_INFO("chinese text pack: iQue rom %s, pack %s%s",
++    LOG_INFO("chinese text pack: iQue rom %s (%s), pack %s%s",
 +             detected ? "found" : "not found",
-+             configChineseText ? "enabled" : "disabled",
-+             adopt ? "" : " (kept: set by the player)");
++             loaded ? "assets loaded" : "assets unavailable",
++             target ? "enabled" : "disabled",
++             (loaded && configChineseTextUserSet) ? " (kept: set by the player)" : "");
 +}
 +
 +// Runtime toggle used by the MISC settings checkbox. Swaps the live dialog /
 +// course / act tables and makes the choice persistent.
 +void chinese_text_pack_set_active(bool active) {
++    // The settings checkbox is already greyed out without the rom; this second
++    // gate covers the paths that do not go through the UI (a config reload, a
++    // future caller), so "no cart, no text" cannot be bypassed by accident.
++    if (active && !cn_rom_assets_ready()) {
++        active = false;
++    }
 +    configChineseText = active;
 +    // Once the player flips this switch by hand, rom detection stops being the
 +    // authority on it.
@@ -184,7 +215,7 @@
  #ifdef TARGET_ANDROID
  int SDL_main(int argc, char *argv[]) {
  #else
-@@ -607,6 +676,13 @@
+@@ -607,6 +700,13 @@
      djui_init_late();
      djui_console_message_dequeue();
  

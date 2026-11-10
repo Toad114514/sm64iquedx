@@ -58,7 +58,7 @@ static bool is_ique_rom(const std::string &romPath) {
 // is scanned with depth 1 because a dumped release usually arrives as its own
 // folder (iQue_Mario_CHN_iQP-SUXXORS/0010cd30.z64) rather than loose at the
 // root, while mod folders one level deeper are not worth walking.
-static bool scan_dir_for_ique_rom(const std::string &dir, int depth) {
+static bool scan_dir_for_ique_rom(const std::string &dir, int depth, std::string *out) {
     std::error_code ec;
     fs::directory_iterator it(dir, ec), itEnd;
     if (ec) { return false; }
@@ -69,7 +69,7 @@ static bool scan_dir_for_ique_rom(const std::string &dir, int depth) {
         const fs::path &entryPath = it->path();
         std::error_code typeEc;
         if (it->is_directory(typeEc)) {
-            if (depth > 0 && !typeEc && scan_dir_for_ique_rom(entryPath.generic_string(), depth - 1)) {
+            if (depth > 0 && !typeEc && scan_dir_for_ique_rom(entryPath.generic_string(), depth - 1, out)) {
                 return true;
             }
             continue;
@@ -77,28 +77,43 @@ static bool scan_dir_for_ique_rom(const std::string &dir, int depth) {
 
         std::string path = entryPath.generic_string();
         if (path_ends_with(path.c_str(), ".z64") && is_ique_rom(path)) {
+            if (out != NULL) { *out = path; }
             return true;
         }
     }
     return false;
 }
 
-// Is a genuine 神游 rom available next to the game or in the user folder?
+// Is a genuine 神游 rom available next to the game or in the user folder, and
+// if so, where is it?
 //
 // Cached: the answer cannot change during a session, and both the startup path
-// and the settings panel ask for it.
-bool rom_checker_ique_rom_present(void) {
-    static int cached = -1;
-    if (cached >= 0) { return cached != 0; }
+// and the settings panel ask for it. The path is cached separately from the
+// boolean because the game now streams the text pack out of this file.
+static std::string sIqueRomPath;
+static bool        sIqueRomScanned = false;
+static bool        sIqueRomPresent = false;
 
-    cached = 0;
+static void find_ique_rom(void) {
+    if (sIqueRomScanned) { return; }
+    sIqueRomScanned = true;
+
     const char *writePath = fs_get_write_path("");
     const char *exePath   = sys_exe_path_dir();
 
-    if (writePath != NULL && scan_dir_for_ique_rom(writePath, 1)) {
-        cached = 1;
-    } else if (exePath != NULL && scan_dir_for_ique_rom(exePath, 1)) {
-        cached = 1;
+    if (writePath != NULL && scan_dir_for_ique_rom(writePath, 1, &sIqueRomPath)) {
+        sIqueRomPresent = true;
+    } else if (exePath != NULL && scan_dir_for_ique_rom(exePath, 1, &sIqueRomPath)) {
+        sIqueRomPresent = true;
     }
-    return cached != 0;
+}
+
+bool rom_checker_ique_rom_present(void) {
+    find_ique_rom();
+    return sIqueRomPresent;
+}
+
+const char *rom_checker_ique_rom_path(void) {
+    find_ique_rom();
+    return sIqueRomPresent ? sIqueRomPath.c_str() : NULL;
 }

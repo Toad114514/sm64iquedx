@@ -224,11 +224,13 @@ chmod +x "$C/platform/DEBIAN/mkdeb.sh" "$C/platform/rpm/mkrpm.sh" \
 
 # 桩 ISCC（Inno Setup 编译器）。ISCC.exe 只有 Windows 上有，而 Windows 上的
 # `-p all` 会真的去调它 —— 不注入桩的话自测会编译一遍真安装包（慢、还依赖
-# 那台机器的 Inno 版本）。桩只记参数，并按 $FAKE_SETUP_OUT 假装产出 setup.exe。
+# 那台机器的 Inno 版本）。桩记下参数、当时的 MSYS2_ARG_CONV_EXCL，并按
+# $FAKE_SETUP_OUT 假装产出 setup.exe。
 fiscc=$C/fake-iscc
 cat > "$fiscc" <<'FAKE'
 #!/bin/sh
 printf '%s\n' "$@" > "${ISCC_ARGS_OUT:-/dev/null}"
+printf '%s\n' "${MSYS2_ARG_CONV_EXCL:-<unset>}" > "${ISCC_ENV_OUT:-/dev/null}"
 [ -n "${FAKE_SETUP_OUT:-}" ] && : > "$FAKE_SETUP_OUT"
 exit 0
 FAKE
@@ -528,13 +530,25 @@ ISCC="$fiscc" ISCC_ARGS_OUT="$C/iscc.args" FAKE_SETUP_OUT="$mk_out" \
     sh "$mkroot/platform/windows/mkexe.sh" "$mkroot/dist" >/dev/null 2>&1 || mk_rc=$?
 if [ "$mk_rc" -eq 0 ] \
    && [ -f "$mk_out" ] \
-   && grep -qxF '/DWithChinese=0' "$C/iscc.args" \
+   && ! grep -qF '/DMyCnLang=' "$C/iscc.args" \
    && grep -qxF '/DMyAppVersion=9.9.9' "$C/iscc.args" \
    && grep -qF 'MySourceDir=' "$C/iscc.args" \
    && grep -qF 'sm64coopdx-iquedx.iss' "$C/iscc.args"; then
-    ok "mkexe：版本从 upstream.txt 读、源目录与 iss 都传给了 ISCC"
+    ok "mkexe：版本从 upstream.txt 读、源目录与 iss 都传给了 ISCC（无语言文件时只出英文）"
 else
     no "mkexe 参数不对（rc=${mk_rc}）→ $(tr '\n' '|' < "$C/iscc.args" 2>/dev/null)"
+fi
+
+# MSYS2 会把 /D 开头的参数当 POSIX 路径改写（/DMyAppVersion=1.5.1 →
+# D:/MyAppVersion=1.5.1），ISCC 于是报 "You may not specify more than one
+# script filename."。判据：调 ISCC 那一刻 MSYS2_ARG_CONV_EXCL 必须是 *
+ISCC_ENV_OUT="$C/iscc.env" ISCC="$fiscc" ISCC_ARGS_OUT="$C/isccn.args" \
+    FAKE_SETUP_OUT="$mk_out" \
+    sh "$mkroot/platform/windows/mkexe.sh" "$mkroot/dist" >/dev/null 2>&1
+if [ "$(cat "$C/iscc.env" 2>/dev/null)" = "*" ]; then
+    ok "mkexe：调 ISCC 前关掉了 MSYS2 的 /D 路径改写（MSYS2_ARG_CONV_EXCL=*）"
+else
+    no "mkexe：MSYS2_ARG_CONV_EXCL=$(cat "$C/iscc.env" 2>/dev/null)，/D 参数会被改写成路径"
 fi
 
 # 没有 ISCC 必须明确报错，不能打出一个空壳安装包
@@ -556,16 +570,58 @@ ISCC="$fiscc" ISCC_ARGS_OUT="$C/iscc3.args" FAKE_SETUP_OUT=/dev/null \
     && ok "mkexe：成品目录没有 sm64coopdx.exe 时非 0 退出" \
     || no "mkexe：没有主程序却返回 0"
 
-# 编译器目录里有简体中文语言文件时，应该把中文界面开关传过去
+# 编译器目录里有简体中文语言文件时（用户自己按需装的），应该用它
 mkdir -p "$C/Languages" && : > "$C/Languages/ChineseSimplified.isl"
 mk_rc4=0
 ISCC="$fiscc" ISCC_ARGS_OUT="$C/iscc4.args" FAKE_SETUP_OUT="$mk_out" \
     sh "$mkroot/platform/windows/mkexe.sh" "$mkroot/dist" >/dev/null 2>&1 || mk_rc4=$?
-if [ "$mk_rc4" -eq 0 ] && grep -qxF '/DWithChinese=1' "$C/iscc4.args"; then
-    ok "mkexe：编译器带 ChineseSimplified.isl 时传中文界面开关"
+cn_arg4=$(grep -F '/DMyCnLang=' "$C/iscc4.args" 2>/dev/null | head -n 1)
+if [ "$mk_rc4" -eq 0 ] && [ -n "$cn_arg4" ] \
+   && ! printf '%s' "$cn_arg4" | grep -qF 'fakerepo'; then
+    ok "mkexe：编译器目录带 ChineseSimplified.isl 时用它（优先于仓库自带）"
 else
-    no "mkexe：没传中文界面开关（rc=${mk_rc4}）→ $(tr '\n' '|' < "$C/iscc4.args" 2>/dev/null)"
+    no "mkexe：没用编译器的语言文件（rc=${mk_rc4}）→ $(tr '\n' '|' < "$C/iscc4.args" 2>/dev/null)"
 fi
+
+# 官方 Inno Setup 不带简体中文 ⇒ 仓库必须自带一份；编译器目录没有时用它
+rm -rf "$C/Languages"
+cp "$repo/platform/windows/ChineseSimplified.isl" "$mkroot/platform/windows/"
+mk_rc5=0
+ISCC="$fiscc" ISCC_ARGS_OUT="$C/iscc6.args" FAKE_SETUP_OUT="$mk_out" \
+    sh "$mkroot/platform/windows/mkexe.sh" "$mkroot/dist" >/dev/null 2>&1 || mk_rc5=$?
+if [ "$mk_rc5" -eq 0 ] && grep -qF '/DMyCnLang=' "$C/iscc6.args" \
+   && grep -qF 'fakerepo' "$C/iscc6.args"; then
+    ok "mkexe：编译器没带中文时用仓库自带的 ChineseSimplified.isl"
+else
+    no "mkexe：没退回仓库自带语言文件（rc=${mk_rc5}）→ $(tr '\n' '|' < "$C/iscc6.args" 2>/dev/null)"
+fi
+
+# 语言文件比编译器新时 ISCC 会报 Unknown message name；不能因此整个包产不出来，
+# 必须丢掉语言文件重试一次（英文界面），并保留第一次的报错原文
+fiscc2=$C/fake-iscc-cnfail
+cat > "$fiscc2" <<'FAKE'
+#!/bin/sh
+n=0
+[ -f "$ISCC_ENV_OUT" ] && n=$(cat "$ISCC_ENV_OUT")
+n=$((n + 1))
+printf '%s\n' "$n" > "$ISCC_ENV_OUT"
+case " $* " in
+    *" /DMyCnLang="*) echo "Error: Unknown message name" >&2; exit 1 ;;
+esac
+[ -n "${FAKE_SETUP_OUT:-}" ] && : > "$FAKE_SETUP_OUT"
+exit 0
+FAKE
+chmod +x "$fiscc2"
+mk_rc6=0
+ISCC="$fiscc2" ISCC_ENV_OUT="$C/iscc.calls" FAKE_SETUP_OUT="$mk_out" \
+    sh "$mkroot/platform/windows/mkexe.sh" "$mkroot/dist" >"$C/mkretry" 2>&1 || mk_rc6=$?
+if [ "$mk_rc6" -eq 0 ] && [ "$(cat "$C/iscc.calls")" = 2 ] \
+   && grep -qF 'Unknown message name' "$C/mkretry"; then
+    ok "mkexe：中文界面编译失败时退回英文重试（不吞掉第一次的报错）"
+else
+    no "mkexe：没重试（rc=${mk_rc6}，调用 $(cat "$C/iscc.calls" 2>/dev/null) 次）→ $(tr '\n' '|' < "$C/mkretry")"
+fi
+rm -f "$mkroot/platform/windows/ChineseSimplified.isl"
 
 # C15: `-p setup` 在非 Windows 上必须明确拒绝，别静默打出一个空壳安装包
 su_rc=0

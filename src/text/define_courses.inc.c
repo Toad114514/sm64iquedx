@@ -1,44 +1,19 @@
-#if defined(SM64COOPDX_CN_TEXT)
-// Simplified-Chinese (iQue) course name data.
-#include "text/cn_courses_cn.inc.c"
-
-// COURSE_BOB etc. are *enum* constants, not preprocessor macros, so they can
-// never be pasted into an identifier with ##. These aliases map each course
-// enum token to the lower-case name used by the generated CN arrays.
-#define CN_CID_COURSE_BOB      course_bob
-#define CN_CID_COURSE_WF       course_wf
-#define CN_CID_COURSE_JRB      course_jrb
-#define CN_CID_COURSE_CCM      course_ccm
-#define CN_CID_COURSE_BBH      course_bbh
-#define CN_CID_COURSE_HMC      course_hmc
-#define CN_CID_COURSE_LLL      course_lll
-#define CN_CID_COURSE_SSL      course_ssl
-#define CN_CID_COURSE_DDD      course_ddd
-#define CN_CID_COURSE_SL       course_sl
-#define CN_CID_COURSE_WDW      course_wdw
-#define CN_CID_COURSE_TTM      course_ttm
-#define CN_CID_COURSE_THI      course_thi
-#define CN_CID_COURSE_TTC      course_ttc
-#define CN_CID_COURSE_RR       course_rr
-
-// Secret-star and castle-star slots occupy indices 15..25 of the same table.
-// Missing these was the pause-menu segfault: the slots fell through to the
-// vanilla {0xFF, 0x00...} ROM stubs, which the CN tokenizer mis-parses.
-#define CN_CID_COURSE_BITDW    course_bitdw
-#define CN_CID_COURSE_BITFS    course_bitfs
-#define CN_CID_COURSE_BITS     course_bits
-#define CN_CID_COURSE_PSS      course_pss
-#define CN_CID_COURSE_COTMC    course_cotmc
-#define CN_CID_COURSE_TOTWC    course_totwc
-#define CN_CID_COURSE_VCUTM    course_vcutm
-#define CN_CID_COURSE_WMOTR    course_wmotr
-#define CN_CID_COURSE_SA       course_sa
-#define CN_CID_COURSE_CAKE_END course_cake_end
-
-#define CN_COURSE_NAME__(id) (&cn_course_ ## id ## _0)
-#define CN_COURSE_NAME_(id)  CN_COURSE_NAME__(id)
-#define CN_COURSE_NAME(id)   CN_COURSE_NAME_(CN_CID_ ## id)
-#endif
+// Course-name table.
+//
+// The Chinese (iQue) names used to be compiled in here, one array per slot
+// (text/cn_courses_cn.inc.c). They are read out of the player's own 神游 dump
+// at startup now -- see src/game/cn_rom_assets.c -- so this file defines only
+// the vanilla ROM-backed buffers and the three pointer tables built from them:
+//
+//   seg2_course_name_table   live table; apply_cn_text_pack() overlays the
+//                            loader's names on top of these when the pack is on
+//   cn_course_name_vanilla   the "off" side of that switch
+//   COURSE_TABLE_original    untouched list, for Lua and the restore paths
+//
+// Initialising the live table with the vanilla buffers (rather than the CN
+// pointers, as the compiled-in version did) costs nothing -- apply_cn_text_pack()
+// runs before anything draws -- and it makes the "no rom" case fall out for
+// free: the loader returns NULL, the slot keeps its English string.
 
 // Every table below re-defines the same three macros; undef them first so the
 // preprocessor does not warn about a non-identical redefinition.
@@ -66,13 +41,9 @@
 #undef SECRET_STAR
 #undef CASTLE_SECRET_STARS
 
-// Active table: CN data when the pack is on, vanilla ROM buffer when off.
+// Active table: starts on the vanilla ROM buffers in every build.
 // Non-const so apply_cn_text_pack() can repoint each course slot.
-#if defined(SM64COOPDX_CN_TEXT)
-#define COURSE_ACTS(id, name, a,b,c,d,e,f) (u8 *)(void *)CN_COURSE_NAME(id),
-#else
 #define COURSE_ACTS(id, name, a,b,c,d,e,f) (u8 *)(void *)GLUE2(COURSE_TABLE, _ ## id),
-#endif
 #define SECRET_STAR(id, name) (u8 *)(void *)GLUE2(COURSE_TABLE, _ ## id),
 #define CASTLE_SECRET_STARS(str) (u8 *)(void *)GLUE2(COURSE_TABLE, _castle_secret_stars),
 
@@ -102,25 +73,6 @@ const u8 *const cn_course_name_vanilla[] = {
 #undef SECRET_STAR
 #undef CASTLE_SECRET_STARS
 
-#if defined(SM64COOPDX_CN_TEXT)
-// CN mirror: the "on" side of the switch.
-#undef COURSE_ACTS
-#undef SECRET_STAR
-#undef CASTLE_SECRET_STARS
-const u8 *const cn_course_name_cn[] = {
-#define COURSE_ACTS(id, name, a,b,c,d,e,f) (const u8 *)CN_COURSE_NAME(id),
-#define SECRET_STAR(id, name) (const u8 *)CN_COURSE_NAME(id),
-#define CASTLE_SECRET_STARS(str) (const u8 *)(&cn_course_course_castle_secret_stars),
-
-#include "courses.h"
-    NULL
-};
-
-#undef COURSE_ACTS
-#undef SECRET_STAR
-#undef CASTLE_SECRET_STARS
-#endif
-
 // "original" table keeps unmodified vanilla names for Lua / restore paths.
 #define COURSE_ACTS(id, name, a,b,c,d,e,f) GLUE2(COURSE_TABLE, _ ## id),
 #define SECRET_STAR(id, name) GLUE2(COURSE_TABLE, _ ## id),
@@ -134,4 +86,3 @@ const u8* GLUE2(COURSE_TABLE, _original)[] = {
 #undef COURSE_ACTS
 #undef SECRET_STAR
 #undef CASTLE_SECRET_STARS
-

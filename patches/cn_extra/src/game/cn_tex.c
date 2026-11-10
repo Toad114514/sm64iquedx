@@ -40,6 +40,7 @@
 #include <ultra64.h>
 
 #include "segment2.h"
+#include "cn_rom_assets.h"
 #include "cn_data/cn_tex_overrides.h"
 
 // gfx_pc.h cannot be included from a C file: it declares struct
@@ -78,7 +79,7 @@ extern Vtx vertex_power_meter_health_segments[];
 
 struct CnTexSlot {
     u8 *target;          // the vanilla array rom_assets_load() filled
-    const u8 *localised; // iQue's replacement pixels
+    u32 tex;             // index into the runtime iQue texture set
     u32 size;
 };
 
@@ -86,19 +87,23 @@ struct CnTexSlot {
 // so a transcription slip cannot silently make one slot's backup overwrite
 // another's (which would corrupt two textures in a way that only shows up as
 // "restoring the pack off looks wrong").
+// `tex` indexes the runtime texture set (cn_rom_assets.h): the pixels are read
+// out of the player's 神游 rom at startup instead of being compiled in, so the
+// pointer cannot live in this static table -- it does not exist until the rom
+// has been opened. cn_tex_apply() resolves it on every call.
 static struct CnTexSlot sSlots[] = {
-    { texture_power_meter_left_side,  sCnTex_power_meter_left,  4096 },
-    { texture_power_meter_right_side, sCnTex_power_meter_right, 4096 },
-    { texture_menu_course_upper, sCnTex_menu_course_upper, 4096 },
-    { texture_menu_course_lower, sCnTex_menu_course_lower, 4096 },
-    { title_texture_0A0001C0, sCnTex_title_frame_0, 3200 },
-    { title_texture_0A000E40, sCnTex_title_frame_1, 3200 },
-    { title_texture_0A001AC0, sCnTex_title_frame_2, 3200 },
-    { title_texture_0A002740, sCnTex_title_frame_3, 3200 },
-    { title_texture_0A0033C0, sCnTex_title_frame_4, 3200 },
-    { title_texture_0A004040, sCnTex_title_frame_5, 3200 },
-    { title_texture_0A004CC0, sCnTex_title_frame_6, 3200 },
-    { title_texture_0A005940, sCnTex_title_frame_7, 3200 },
+    { texture_power_meter_left_side,  0, 4096 },
+    { texture_power_meter_right_side, 1, 4096 },
+    { texture_menu_course_upper,      2, 4096 },
+    { texture_menu_course_lower,      3, 4096 },
+    { title_texture_0A0001C0,         4, 3200 },
+    { title_texture_0A000E40,         5, 3200 },
+    { title_texture_0A001AC0,         6, 3200 },
+    { title_texture_0A002740,         7, 3200 },
+    { title_texture_0A0033C0,         8, 3200 },
+    { title_texture_0A004040,         9, 3200 },
+    { title_texture_0A004CC0,        10, 3200 },
+    { title_texture_0A005940,        11, 3200 },
 };
 
 #define CN_TEX_SLOT_COUNT ((u32)(sizeof(sSlots) / sizeof(sSlots[0])))
@@ -163,8 +168,9 @@ void cn_tex_apply(bool active) {
     }
 
     for (i = 0; i < CN_TEX_SLOT_COUNT; i++) {
+        const u8 *localised = active ? cn_rom_texture(sSlots[i].tex) : NULL;
         memcpy(sSlots[i].target,
-               active ? sSlots[i].localised : &sUsBackup[sBackupOffset[i]],
+               (localised != NULL) ? localised : &sUsBackup[sBackupOffset[i]],
                sSlots[i].size);
     }
 

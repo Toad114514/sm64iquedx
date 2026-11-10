@@ -1407,7 +1407,7 @@ $(BUILD_DIR)/assets/demo_data.c: assets/demo_data.json $(wildcard assets/demos/*
 # NOTE: the CN sources are listed as prerequisites so that editing the
 # generated iQue text (rather than the template) still regenerates the
 # preprocessed output. Without this the build silently keeps a stale copy.
-CN_TEXT_DEPS := $(wildcard text/cn_dialogs_cn.inc.c text/cn_courses_cn.inc.c text/cn_labels.inc.c)
+CN_TEXT_DEPS := $(wildcard text/cn_dialogs_cn.inc.c text/cn_labels.inc.c)
 $(BUILD_DIR)/text/%/define_courses.inc.c: text/define_courses.inc.c text/%/courses.h $(CN_TEXT_DEPS)
 	@$(PRINT) "$(GREEN)Preprocessing: $(BLUE)$@ $(NO_COL)\n"
 	$(V)$(CPP) $(PROF_FLAGS) $(CPPFLAGS) $< -o - -I text/$*/ | $(TEXTCONV) charmap.txt - $@

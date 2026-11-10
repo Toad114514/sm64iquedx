@@ -2,12 +2,26 @@
 // (defines en_dialog_table etc.)
 
 #if defined(SM64COOPDX_CN_TEXT)
-// Simplified-Chinese (iQue) text pack: real two-byte CN glyph data.
-// Generated from the official n64decomp/sm64 text/cn sources.
+// Simplified-Chinese (iQue) text pack.
 //
-// Keeping the name dialog_text_<id> for the ROM-backed vanilla buffer lets
-// dialog_assets.inc.c load into it unchanged; the CN arrays get their own
-// cn_dialog_<id> names and apply_cn_text_pack() picks which one is live.
+// The dialog strings are NOT compiled in any more: they are read out of the
+// player's own 神游 rom at startup (src/game/cn_rom_assets.c). What
+// text/cn_dialogs_cn.inc.c defines now is a pair of macros per dialog --
+// cn_dialog_<id> and cn_dialog_lines_<id> -- that both forward to the loader.
+// Keeping the same names means apply_cn_text_pack() and every consumer below
+// are unchanged.
+//
+// Consequence: these are *expressions*, not array objects, so they cannot
+// appear in a static initialiser. Anything that used to bake them in (the
+// registry below, dialog_entry_orig_<id>'s initial value) now starts from the
+// vanilla buffer and is repointed once at startup.
+// Declared rather than included on purpose: this file is textconv'd and then
+// #included from segment2.c, and pulling in game/cn_rom_assets.h there drags
+// types.h in at a point where the surrounding headers are already half done --
+// it collides with stddef/pthread and fails to compile. Two prototypes are
+// cheaper than reworking the text pipeline.
+extern const u8 *cn_rom_dialog_str(u32 index);
+extern u32 cn_rom_dialog_lines(u32 index);
 #include "text/cn_dialogs_cn.inc.c"
 
 // Vanilla ROM-backed text buffers (filled by dialog_assets.inc.c below).
@@ -26,11 +40,10 @@
 // Registry of every CN dialog buffer, so cn_is_cn_string() can tell "this
 // pointer is CN text" without having to reach into the dialog entries (which
 // change at runtime via apply_cn_text_pack and Lua overrides).
-const u8 *const cn_dialog_registry[] = {
-#define DEFINE_DIALOG(id, _1, _2, _3, _4, _5) cn_dialog_ ## id,
-#include "dialogs.h"
-    NULL
-};
+//
+// No longer const / statically initialised: the CN strings are wherever the
+// loader put them. apply_cn_text_pack() fills this before anything is drawn.
+const u8 *cn_dialog_registry[256];
 #endif
 
 #undef DEFINE_DIALOG
@@ -45,9 +58,13 @@ const u8 *const cn_dialog_registry[] = {
 // whole box depends on it: the height scale, the page-break line and the
 // scissor window are all derived from dialog->linesPerBox. Keeping the US value
 // drew a box one line too short, so the last line of text hung out of it.
+//
+// .str starts on the vanilla buffer rather than NULL for the same reason: if
+// anything ever reads a dialog entry before the pack has been applied, drawing
+// English is a bad outcome, but dereferencing NULL is a crash.
 #define DEFINE_DIALOG(id, unused, linesPerBox, leftOffset, width, _) \
     static struct DialogEntry dialog_entry_orig_ ## id = { \
-        unused, linesPerBox, leftOffset, width, cn_dialog_ ## id, NULL, false \
+        unused, linesPerBox, leftOffset, width, dialog_text_ ## id, NULL, false \
     };
 #else
 #define DEFINE_DIALOG(id, unused, linesPerBox, leftOffset, width, _) \
@@ -119,44 +136,31 @@ const struct DialogEntry *const seg2_dialog_original[] = {
 #undef COURSE_ACTS
 #undef EXTRA_TEXT
 
-#if defined(SM64COOPDX_CN_TEXT)
-// COURSE_BOB etc. are enum constants (not macros), so they cannot be pasted
-// with ##. CN_CID_<token> (defined in define_courses.inc.c) expands to the
-// lower-case name used by the generated CN arrays. Three macro levels are
-// needed because the middle one is only reached as a ## operand.
-#define CN_ACT_PTR__(id, i) ((u8 *)(void *)&cn_course_ ## id ## _ ## i)
-#define CN_ACT_PTR_(id, i)  CN_ACT_PTR__(id, i)
-#define CN_ACT_PTR(id, i)   CN_ACT_PTR_(CN_CID_ ## id, i)
-#define COURSE_ACTS(id, name, a,b,c,d,e,f) \
-    CN_ACT_PTR(id, 1), CN_ACT_PTR(id, 2), CN_ACT_PTR(id, 3), \
-    CN_ACT_PTR(id, 4), CN_ACT_PTR(id, 5), CN_ACT_PTR(id, 6),
-#else
+// The CN act names are no longer compiled in: they are read out of the player's
+// rom at startup (src/game/cn_rom_assets.c) and overlaid by
+// apply_cn_text_pack(). Both modes therefore build this table the same way --
+// from the ROM-backed vanilla buffers -- which is also what a missing rom shows.
 #define COURSE_ACTS(id, name, a,b,c,d,e,f) \
     (u8 *)(void *)act_name_ ## id ## _1, (u8 *)(void *)act_name_ ## id ## _2, (u8 *)(void *)act_name_ ## id ## _3, \
     (u8 *)(void *)act_name_ ## id ## _4, (u8 *)(void *)act_name_ ## id ## _5, (u8 *)(void *)act_name_ ## id ## _6,
-#endif
 #define EXTRA_TEXT(id, str) (u8 *)(void *)extra_text_ ## id,
 
 // Active table. Non-const so apply_cn_text_pack() can swap each slot between
-// the CN array and the vanilla ROM-backed buffer.
+// the loader's CN name and the vanilla ROM-backed buffer.
 u8* seg2_act_name_table[] = {
 #include "courses.h"
     NULL
 };
 
-// Vanilla (ROM-backed) mirror: always the "off" side of the switch. In
-// non-CN builds this is identical to seg2_act_name_table.
+// Vanilla (ROM-backed) mirror: the "off" side of the switch. In non-CN builds
+// this is identical to seg2_act_name_table.
 //
-// The macro redefinition below is load-bearing, not redundant with the #else
-// branch above. Both this table and seg2_act_name_table[] expand the *same*
-// courses.h, and the active table's COURSE_ACTS (line 123) resolves to the CN
-// pointers in a CN build. Without an explicit #undef + redefinition here, this
-// "vanilla" mirror would silently be built from the CN pointers too, making
-// both sides of the runtime switch identical: apply_cn_text_pack() would
-// install CN act names whether the pack is on or off, and -- because
-// cn_is_cn_string() only trusts these pointers while gCnTextPackActive is set
-// -- the same bytes would then be walked as vanilla single-byte text with the
-// switch off, stopping at the first 0xFF.
+// The redefinition below is load-bearing, not redundant with the one above:
+// both tables expand the *same* courses.h, so apply_cn_text_pack() needs a
+// second, independent list of the vanilla pointers to restore when the pack is
+// switched off. (Up to the runtime-loading change the active table started on
+// the CN pointers and this list was the only place the vanilla ones survived;
+// now the two are byte-identical, and the list is simply the restore list.)
 #undef COURSE_ACTS
 #undef EXTRA_TEXT
 #define COURSE_ACTS(id, name, a,b,c,d,e,f) \
@@ -169,23 +173,8 @@ const u8 *const cn_act_name_vanilla[] = {
     NULL
 };
 
-#if defined(SM64COOPDX_CN_TEXT)
-// CN mirror: the "on" side of the switch.
 #undef COURSE_ACTS
 #undef EXTRA_TEXT
-const u8 *const cn_act_name_cn[] = {
-#define COURSE_ACTS(id, name, a,b,c,d,e,f) \
-    CN_ACT_PTR(id, 1), CN_ACT_PTR(id, 2), CN_ACT_PTR(id, 3), \
-    CN_ACT_PTR(id, 4), CN_ACT_PTR(id, 5), CN_ACT_PTR(id, 6),
-#define EXTRA_TEXT(id, str) extra_text_ ## id,
-
-#include "courses.h"
-    NULL
-};
-
-#undef COURSE_ACTS
-#undef EXTRA_TEXT
-#endif
 
 // The "original" table keeps the vanilla pointers in every build so Lua and
 // the dialog restore path always see unmodified text.
@@ -222,6 +211,11 @@ const u8* seg2_act_name_table_original[] = {
 // (hosting or joining a room calls smlua_init() -> smlua_text_utils_reset_all()).
 // If you ever make these pointers heap-allocated, update that ownership set too.
 void apply_cn_text_pack(void) {
+    // Filled below, one per dialog, in dialogs.h order. The array is sized
+    // generously (256 entries for 170 dialogs) and NULL-terminated so
+    // cn_is_cn_string() can walk it without needing the count.
+    u32 cnRegIdx = 0;
+
     // dialogs: text pointer AND page height. Both have to follow the same
     // switch -- a CN string paginated with the US line count overflows the box.
 // NOTE: the third macro parameter must NOT be named `linesPerBox`. The body
@@ -231,9 +225,12 @@ void apply_cn_text_pack(void) {
 // would fail to compile. Hence `_lines`.
 #define DEFINE_DIALOG(id, _1, _lines, _3, _4, _5) \
     dialog_entry_orig_ ## id.str = gCnTextPackActive ? cn_dialog_ ## id : dialog_text_ ## id; \
-    dialog_entry_orig_ ## id.linesPerBox = gCnTextPackActive ? cn_dialog_lines_ ## id : (_lines);
+    dialog_entry_orig_ ## id.linesPerBox = gCnTextPackActive ? cn_dialog_lines_ ## id : (_lines); \
+    cn_dialog_registry[cnRegIdx++] = (u8 *)cn_dialog_ ## id;
 
 #include "dialogs.h"
+
+    cn_dialog_registry[cnRegIdx] = NULL;
 
 #undef DEFINE_DIALOG
 
@@ -243,8 +240,12 @@ void apply_cn_text_pack(void) {
         extern u8 *seg2_act_name_table[];
         extern const u8 *const cn_course_name_vanilla[];
         extern const u8 *const cn_act_name_vanilla[];
-        extern const u8 *const cn_course_name_cn[];
-        extern const u8 *const cn_act_name_cn[];
+        // Read out of the player's rom by src/game/cn_rom_assets.c. Declared
+        // rather than included for the same reason as the dialog accessors
+        // above: this file is textconv'd and pulled into segment2.c, where
+        // dragging in game/cn_rom_assets.h breaks the include order.
+        extern const u8 *cn_rom_course_name(u32 slot);
+        extern const u8 *cn_rom_act_name(u32 index);
         u32 i;
 
         // Hard upper bounds: die loudly instead of walking off the end of the
@@ -254,6 +255,8 @@ void apply_cn_text_pack(void) {
         #define CN_COURSE_SLOTS 26
         #define CN_ACT_SLOTS    200
 
+        // The vanilla buffers first: this is what the pack shows when it is
+        // off, and it is the starting point every toggle returns to.
         for (i = 0; i < CN_COURSE_SLOTS && cn_course_name_vanilla[i] != NULL; i++) {
             seg2_course_name_table[i] = (u8 *)cn_course_name_vanilla[i];
         }
@@ -262,12 +265,20 @@ void apply_cn_text_pack(void) {
         }
 
         if (gCnTextPackActive) {
-            // overlay the CN pointers on top of the vanilla defaults
-            for (i = 0; i < CN_COURSE_SLOTS && cn_course_name_cn[i] != NULL; i++) {
-                seg2_course_name_table[i] = (u8 *)cn_course_name_cn[i];
+            // Overlay the rom's names. Without a rom every call returns NULL and
+            // the vanilla pointers stay -- which is exactly the intended
+            // behaviour: no cartridge, no Chinese text.
+            //
+            // The act overlay stops at 90 (15 stages x 6 acts). Slots 90..96 are
+            // the port's extra texts, which the Lua text layer addresses by
+            // index and expects to be the vanilla buffers.
+            for (i = 0; i < CN_COURSE_SLOTS; i++) {
+                const u8 *p = cn_rom_course_name(i);
+                if (p != NULL) { seg2_course_name_table[i] = (u8 *)p; }
             }
-            for (i = 0; i < CN_ACT_SLOTS && cn_act_name_cn[i] != NULL; i++) {
-                seg2_act_name_table[i] = (u8 *)cn_act_name_cn[i];
+            for (i = 0; i < 90; i++) {
+                const u8 *p = cn_rom_act_name(i);
+                if (p != NULL) { seg2_act_name_table[i] = (u8 *)p; }
             }
         }
 

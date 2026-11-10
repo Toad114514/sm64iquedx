@@ -2,10 +2,12 @@
 #include "rom_assets.h"
 #include "pc/debuglog.h"
 #include "rom_checker.h"
+#include "cn_text_gate.h"
 #include "apparition.inc.c"
 #include "utils/misc.h"
 #include "pc/configfile.h"
 #include "game/cn_tex.h"
+#include "game/cn_rom_assets.h"
 
 #define ROM_ASSET_LOAD_DATA(bits) for (u##bits *data = asset->ptr; asset->cursor < asset->segmentedSize; data++) { *data = READ##bits(asset); }
 
@@ -199,8 +201,20 @@ void rom_assets_load(void) {
     // zero-filled arrays that exist before the load.
     //
     // configChineseText is safe to read here: configfile_load() runs before the
-    // loading thread is started.
-    cn_tex_on_rom_loaded(configChineseText);
+    // loading thread is started. It is *not* the live answer on its own though
+    // -- without the iQue dump the pack stays off whatever the player stored --
+    // so the same gate the text tables use decides it. Going through
+    // cn_text_pack_target() here is what keeps the art and the text on the same
+    // side: applying 「力量」 while the dialog strings stay English is exactly
+    // the mixed state this project has been bitten by before.
+    // This runs on the loading thread, *before* chinese_text_pack_init(), so the
+    // pack loader has not necessarily run yet -- and the localised pixels now
+    // come out of the same rom, so it has to. Loading here is idempotent; the
+    // startup path later just finds it already done.
+    bool const packData = cn_rom_assets_ready() || cn_rom_assets_load(rom_checker_ique_rom_path());
+    cn_tex_on_rom_loaded(cn_text_pack_target(packData,
+                                             configChineseTextUserSet,
+                                             configChineseText));
 }
 
 void rom_assets_queue(void* ptr, enum RomAssetType assetType, u32 physicalAddress, u32 physicalSize, u32 segmentedAddress, u32 segmentedSize) {

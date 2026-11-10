@@ -66,7 +66,7 @@
 +# NOTE: the CN sources are listed as prerequisites so that editing the
 +# generated iQue text (rather than the template) still regenerates the
 +# preprocessed output. Without this the build silently keeps a stale copy.
-+CN_TEXT_DEPS := $(wildcard text/cn_dialogs_cn.inc.c text/cn_courses_cn.inc.c text/cn_labels.inc.c)
++CN_TEXT_DEPS := $(wildcard text/cn_dialogs_cn.inc.c text/cn_labels.inc.c)
 +$(BUILD_DIR)/text/%/define_courses.inc.c: text/define_courses.inc.c text/%/courses.h $(CN_TEXT_DEPS)
  	@$(PRINT) "$(GREEN)Preprocessing: $(BLUE)$@ $(NO_COL)\n"
  	$(V)$(CPP) $(PROF_FLAGS) $(CPPFLAGS) $< -o - -I text/$*/ | $(TEXTCONV) charmap.txt - $@
@@ -2318,7 +2318,16 @@
  struct DialogEntry* smlua_text_utils_dialog_get(enum DialogId dialogId) {
 --- a/src/pc/pc_main.c
 +++ b/src/pc/pc_main.c
-@@ -42,6 +42,7 @@
+@@ -18,6 +18,8 @@
+ 
+ #include "rom_assets.h"
+ #include "rom_checker.h"
++#include "cn_text_gate.h"
++#include "game/cn_rom_assets.h"
+ #include "pc_main.h"
+ #include "loading.h"
+ #include "cliopts.h"
+@@ -42,6 +44,7 @@
  #include "pc/djui/djui.h"
  #include "pc/djui/djui_unicode.h"
  #include "pc/djui/djui_panel.h"
@@ -2326,7 +2335,7 @@
  #include "pc/djui/djui_panel_modlist.h"
  #include "pc/djui/djui_ctx_display.h"
  #include "pc/djui/djui_fps_display.h"
-@@ -55,6 +56,7 @@
+@@ -55,6 +58,7 @@
  
  #include "gfx_dimensions.h"
  #include "game/segment2.h"
@@ -2334,61 +2343,83 @@
  
  #include "engine/math_util.h"
  
-@@ -500,6 +502,73 @@
+@@ -500,6 +504,95 @@
      return NULL;
  }
  
 +#if defined(SM64COOPDX_CN_TEXT)
 +// Called once the vanilla rom has been imported and DJUI is up.
 +//
-+// There is deliberately no confirmation box: the answer is derived from what
-+// the player actually owns.
++// Nothing about the pack is compiled in: the glyphs, the dialog text, the
++// course/act names and the localised textures are all read out of the player's
++// own 神游 dump at startup (cn_rom_assets.c). Owning the cartridge is therefore
++// no longer a condition we merely *check* -- without it there are no pixels and
++// no strings, so the pack cannot be shown at all.
 +//
-+//   * the exact 神游 (iQue) rom dump is present -> switch the Chinese pack on
-+//   * it is not present                        -> leave it off
++//   * the exact 神游 (iQue) rom dump is present -> default on, and the player
++//     may switch it off by hand (that choice then wins over detection in both
++//     directions, otherwise unchecking the box would silently undo itself on
++//     the next start)
++//   * it is not present -> off for this session, the settings checkbox is
++//     greyed out, and a hint explains why (djui_panel_misc.c)
 +//
-+// The rom is only a *signal* here -- the engine still runs on the US image and
-+// the pack data is compiled in -- but it is a decisive one. Someone who owns
-+// the Chinese release wants Chinese text; someone who does not should not be
-+// handed text lifted from a cartridge they never supplied. Asking a question
-+// whose answer we can already read off the filesystem was pure friction.
++// The gate is deliberately unconditional: a config written by an older build
++// can carry configChineseText = true on a machine that never supplied the rom,
++// and the pack must not light up just because configChineseTextUserSet was set
++// once. The stored value is not rewritten (see below) -- only the live state is.
 +//
-+// The switch is not forced on every launch, though: clicking 设置 → 其他 →
-+// 中文字库(神游) sets configChineseTextUserSet, and from then on the player's
-+// choice wins over detection in both directions -- otherwise unchecking the
-+// box would silently undo itself on the next start.
-+//
-+// Note for configs written by an older build: there, configChineseTextPrompted
-+// could only become true by answering the old box, and that answer is now
-+// re-derived once from detection (owning the rom means "on"). The first manual
-+// toggle is enough to make the choice stick again.
++// Note for configs written by an older build: configChineseTextPrompted could
++// only become true by answering the old first-run box; that answer is now
++// re-derived from detection (owning the rom means "on").
 +static void chinese_text_pack_init(void) {
 +    bool const detected = rom_checker_ique_rom_present();
-+    bool const adopt    = !configChineseTextUserSet;
 +
-+    if (adopt && (configChineseText != detected || !configChineseTextPrompted)) {
-+        configChineseText         = detected;
-+        configChineseTextPrompted = true;
++    // The pack is no longer compiled into the binary: every glyph, dialog
++    // string and localised texture is read out of the player's own 神游 dump at
++    // startup (cn_rom_assets.c). Owning the cartridge is therefore no longer a
++    // precondition we merely *check* -- without it there is no data to show.
++    bool const loaded = detected && cn_rom_assets_load(rom_checker_ique_rom_path());
 +
-+        // rom_assets_load() already applied the texture overlay (power meter
-+        // 「力量」, title wordmark, COURSE sign) using the *old* value, so
-+        // re-apply it or the art and the text end up from different sets.
-+        cn_tex_apply(detected);
++    // No rom / unreadable rom -> off, no matter what the config says. With the
++    // rom -> the player's manual choice if there is one, otherwise on. The rule
++    // itself lives in cn_text_gate.h so it can be tested on its own.
++    bool const target = cn_text_pack_target(loaded, configChineseTextUserSet, configChineseText);
++
++    // configChineseText is deliberately left as the player wrote it. A missing
++    // dump only means "not this session": storing false here would make one
++    // launch with the cartridge in an unscanned folder (a phone, a second
++    // drive) silently permanent, and the player would have no way back short of
++    // toggling the box while the dump is nowhere to be found.
++    //
++    // Everything that decides *what to draw* goes through gCnTextPackActive or
++    // through cn_text_pack_target() again (rom_assets.c does the latter), so the
++    // config value is never mistaken for the live one.
++    bool const needSave = !configChineseTextPrompted;
++    configChineseTextPrompted = true;
++
++    gCnTextPackActive = target ? 1 : 0;
++    apply_cn_text_pack();
++
++    if (needSave) {
 +        configfile_save(configfile_name());
 +    }
 +
-+    gCnTextPackActive = configChineseText ? 1 : 0;
-+    apply_cn_text_pack();
-+
-+    LOG_INFO("chinese text pack: iQue rom %s, pack %s%s",
++    LOG_INFO("chinese text pack: iQue rom %s (%s), pack %s%s",
 +             detected ? "found" : "not found",
-+             configChineseText ? "enabled" : "disabled",
-+             adopt ? "" : " (kept: set by the player)");
++             loaded ? "assets loaded" : "assets unavailable",
++             target ? "enabled" : "disabled",
++             (loaded && configChineseTextUserSet) ? " (kept: set by the player)" : "");
 +}
 +
 +// Runtime toggle used by the MISC settings checkbox. Swaps the live dialog /
 +// course / act tables and makes the choice persistent.
 +void chinese_text_pack_set_active(bool active) {
++    // The settings checkbox is already greyed out without the rom; this second
++    // gate covers the paths that do not go through the UI (a config reload, a
++    // future caller), so "no cart, no text" cannot be bypassed by accident.
++    if (active && !cn_rom_assets_ready()) {
++        active = false;
++    }
 +    configChineseText = active;
 +    // Once the player flips this switch by hand, rom detection stops being the
 +    // authority on it.
@@ -2408,7 +2439,7 @@
  int main(int argc, char *argv[]) {
      // handle terminal arguments
      if (!parse_cli_opts(argc, argv)) { return 0; }
-@@ -577,6 +646,13 @@
+@@ -577,6 +670,13 @@
      djui_init_late();
      djui_console_message_dequeue();
  
@@ -2424,16 +2455,20 @@
      if (can_update_game()) {
 --- a/src/pc/rom_assets.c
 +++ b/src/pc/rom_assets.c
-@@ -4,6 +4,8 @@
+@@ -2,8 +2,12 @@
+ #include "rom_assets.h"
+ #include "pc/debuglog.h"
  #include "rom_checker.h"
++#include "cn_text_gate.h"
  #include "apparition.inc.c"
  #include "utils/misc.h"
 +#include "pc/configfile.h"
 +#include "game/cn_tex.h"
++#include "game/cn_rom_assets.h"
  
  #define ROM_ASSET_LOAD_DATA(bits) for (u##bits *data = asset->ptr; asset->cursor < asset->segmentedSize; data++) { *data = READ##bits(asset); }
  
-@@ -186,6 +188,19 @@
+@@ -186,6 +190,31 @@
      }
  
      fclose(sRomFile);
@@ -2448,14 +2483,26 @@
 +    // zero-filled arrays that exist before the load.
 +    //
 +    // configChineseText is safe to read here: configfile_load() runs before the
-+    // loading thread is started.
-+    cn_tex_on_rom_loaded(configChineseText);
++    // loading thread is started. It is *not* the live answer on its own though
++    // -- without the iQue dump the pack stays off whatever the player stored --
++    // so the same gate the text tables use decides it. Going through
++    // cn_text_pack_target() here is what keeps the art and the text on the same
++    // side: applying 「力量」 while the dialog strings stay English is exactly
++    // the mixed state this project has been bitten by before.
++    // This runs on the loading thread, *before* chinese_text_pack_init(), so the
++    // pack loader has not necessarily run yet -- and the localised pixels now
++    // come out of the same rom, so it has to. Loading here is idempotent; the
++    // startup path later just finds it already done.
++    bool const packData = cn_rom_assets_ready() || cn_rom_assets_load(rom_checker_ique_rom_path());
++    cn_tex_on_rom_loaded(cn_text_pack_target(packData,
++                                             configChineseTextUserSet,
++                                             configChineseText));
  }
  
  void rom_assets_queue(void* ptr, enum RomAssetType assetType, u32 physicalAddress, u32 physicalSize, u32 segmentedAddress, u32 segmentedSize) {
 --- a/src/pc/rom_checker.h
 +++ b/src/pc/rom_checker.h
-@@ -7,3 +7,7 @@
+@@ -7,3 +7,13 @@
  
  bool main_rom_handler(void);
  void rom_on_drop_file(const char *path);
@@ -2463,50 +2510,31 @@
 +// True when the exact 神游 (iQue) Chinese rom dump is present in the game or
 +// user folder. See rom_checker.cpp for the accepted MD5.
 +bool rom_checker_ique_rom_present(void);
++
++// Path to that rom, or NULL when it is not there. The Chinese text pack is
++// *read out of this file at runtime* rather than compiled in, so the path is
++// not merely a signal any more -- without it there is no glyph data at all.
++// The returned pointer stays valid for the rest of the session.
++const char *rom_checker_ique_rom_path(void);
 --- a/text/define_courses.inc.c
 +++ b/text/define_courses.inc.c
-@@ -1,3 +1,54 @@
-+#if defined(SM64COOPDX_CN_TEXT)
-+// Simplified-Chinese (iQue) course name data.
-+#include "text/cn_courses_cn.inc.c"
-+
-+// COURSE_BOB etc. are *enum* constants, not preprocessor macros, so they can
-+// never be pasted into an identifier with ##. These aliases map each course
-+// enum token to the lower-case name used by the generated CN arrays.
-+#define CN_CID_COURSE_BOB      course_bob
-+#define CN_CID_COURSE_WF       course_wf
-+#define CN_CID_COURSE_JRB      course_jrb
-+#define CN_CID_COURSE_CCM      course_ccm
-+#define CN_CID_COURSE_BBH      course_bbh
-+#define CN_CID_COURSE_HMC      course_hmc
-+#define CN_CID_COURSE_LLL      course_lll
-+#define CN_CID_COURSE_SSL      course_ssl
-+#define CN_CID_COURSE_DDD      course_ddd
-+#define CN_CID_COURSE_SL       course_sl
-+#define CN_CID_COURSE_WDW      course_wdw
-+#define CN_CID_COURSE_TTM      course_ttm
-+#define CN_CID_COURSE_THI      course_thi
-+#define CN_CID_COURSE_TTC      course_ttc
-+#define CN_CID_COURSE_RR       course_rr
-+
-+// Secret-star and castle-star slots occupy indices 15..25 of the same table.
-+// Missing these was the pause-menu segfault: the slots fell through to the
-+// vanilla {0xFF, 0x00...} ROM stubs, which the CN tokenizer mis-parses.
-+#define CN_CID_COURSE_BITDW    course_bitdw
-+#define CN_CID_COURSE_BITFS    course_bitfs
-+#define CN_CID_COURSE_BITS     course_bits
-+#define CN_CID_COURSE_PSS      course_pss
-+#define CN_CID_COURSE_COTMC    course_cotmc
-+#define CN_CID_COURSE_TOTWC    course_totwc
-+#define CN_CID_COURSE_VCUTM    course_vcutm
-+#define CN_CID_COURSE_WMOTR    course_wmotr
-+#define CN_CID_COURSE_SA       course_sa
-+#define CN_CID_COURSE_CAKE_END course_cake_end
-+
-+#define CN_COURSE_NAME__(id) (&cn_course_ ## id ## _0)
-+#define CN_COURSE_NAME_(id)  CN_COURSE_NAME__(id)
-+#define CN_COURSE_NAME(id)   CN_COURSE_NAME_(CN_CID_ ## id)
-+#endif
+@@ -1,3 +1,29 @@
++// Course-name table.
++//
++// The Chinese (iQue) names used to be compiled in here, one array per slot
++// (text/cn_courses_cn.inc.c). They are read out of the player's own 神游 dump
++// at startup now -- see src/game/cn_rom_assets.c -- so this file defines only
++// the vanilla ROM-backed buffers and the three pointer tables built from them:
++//
++//   seg2_course_name_table   live table; apply_cn_text_pack() overlays the
++//                            loader's names on top of these when the pack is on
++//   cn_course_name_vanilla   the "off" side of that switch
++//   COURSE_TABLE_original    untouched list, for Lua and the restore paths
++//
++// Initialising the live table with the vanilla buffers (rather than the CN
++// pointers, as the compiled-in version did) costs nothing -- apply_cn_text_pack()
++// runs before anything draws -- and it makes the "no rom" case fall out for
++// free: the loader returns NULL, the slot keeps its English string.
 +
 +// Every table below re-defines the same three macros; undef them first so the
 +// preprocessor does not warn about a non-identical redefinition.
@@ -2520,28 +2548,26 @@
  #define COURSE_ACTS(id, name, a,b,c,d,e,f) \
      static u8 GLUE2(COURSE_TABLE, _ ## id)[name] = { 0xFF };
  
-@@ -15,15 +66,66 @@
+@@ -15,16 +41,30 @@
  #undef SECRET_STAR
  #undef CASTLE_SECRET_STARS
  
 -#define COURSE_ACTS(id, name, a,b,c,d,e,f) GLUE2(COURSE_TABLE, _ ## id),
 -#define SECRET_STAR(id, name) GLUE2(COURSE_TABLE, _ ## id),
 -#define CASTLE_SECRET_STARS(str) GLUE2(COURSE_TABLE, _castle_secret_stars),
-+// Active table: CN data when the pack is on, vanilla ROM buffer when off.
++// Active table: starts on the vanilla ROM buffers in every build.
 +// Non-const so apply_cn_text_pack() can repoint each course slot.
-+#if defined(SM64COOPDX_CN_TEXT)
-+#define COURSE_ACTS(id, name, a,b,c,d,e,f) (u8 *)(void *)CN_COURSE_NAME(id),
-+#else
 +#define COURSE_ACTS(id, name, a,b,c,d,e,f) (u8 *)(void *)GLUE2(COURSE_TABLE, _ ## id),
-+#endif
 +#define SECRET_STAR(id, name) (u8 *)(void *)GLUE2(COURSE_TABLE, _ ## id),
 +#define CASTLE_SECRET_STARS(str) (u8 *)(void *)GLUE2(COURSE_TABLE, _castle_secret_stars),
-+
+ 
+-const u8* COURSE_TABLE[] = {
 +u8* COURSE_TABLE[] = {
-+#include "courses.h"
-+    NULL
-+};
-+
+ #include "courses.h"
+     NULL
+ };
+ 
+-const u8* GLUE2(COURSE_TABLE, _original)[] = {
 +// Vanilla mirror: the "off" side of the switch (a no-op distinction in
 +// non-CN builds, where it aliases the same buffers).
 +#undef COURSE_ACTS
@@ -2554,26 +2580,20 @@
 +    (const u8 *)(void *)GLUE2(COURSE_TABLE, _ ## id),
 +#define CASTLE_SECRET_STARS(str) \
 +    (const u8 *)(void *)GLUE2(COURSE_TABLE, _castle_secret_stars),
- 
--const u8* COURSE_TABLE[] = {
++
  #include "courses.h"
      NULL
  };
+@@ -33,3 +73,16 @@
+ #undef SECRET_STAR
+ #undef CASTLE_SECRET_STARS
  
-+#undef COURSE_ACTS
-+#undef SECRET_STAR
-+#undef CASTLE_SECRET_STARS
++// "original" table keeps unmodified vanilla names for Lua / restore paths.
++#define COURSE_ACTS(id, name, a,b,c,d,e,f) GLUE2(COURSE_TABLE, _ ## id),
++#define SECRET_STAR(id, name) GLUE2(COURSE_TABLE, _ ## id),
++#define CASTLE_SECRET_STARS(str) GLUE2(COURSE_TABLE, _castle_secret_stars),
 +
-+#if defined(SM64COOPDX_CN_TEXT)
-+// CN mirror: the "on" side of the switch.
-+#undef COURSE_ACTS
-+#undef SECRET_STAR
-+#undef CASTLE_SECRET_STARS
-+const u8 *const cn_course_name_cn[] = {
-+#define COURSE_ACTS(id, name, a,b,c,d,e,f) (const u8 *)CN_COURSE_NAME(id),
-+#define SECRET_STAR(id, name) (const u8 *)CN_COURSE_NAME(id),
-+#define CASTLE_SECRET_STARS(str) (const u8 *)(&cn_course_course_castle_secret_stars),
-+
++const u8* GLUE2(COURSE_TABLE, _original)[] = {
 +#include "courses.h"
 +    NULL
 +};
@@ -2581,29 +2601,33 @@
 +#undef COURSE_ACTS
 +#undef SECRET_STAR
 +#undef CASTLE_SECRET_STARS
-+#endif
-+
-+// "original" table keeps unmodified vanilla names for Lua / restore paths.
-+#define COURSE_ACTS(id, name, a,b,c,d,e,f) GLUE2(COURSE_TABLE, _ ## id),
-+#define SECRET_STAR(id, name) GLUE2(COURSE_TABLE, _ ## id),
-+#define CASTLE_SECRET_STARS(str) GLUE2(COURSE_TABLE, _castle_secret_stars),
-+
- const u8* GLUE2(COURSE_TABLE, _original)[] = {
- #include "courses.h"
-     NULL
 --- a/text/define_text.inc.c
 +++ b/text/define_text.inc.c
-@@ -1,20 +1,70 @@
+@@ -1,20 +1,87 @@
  // == dialog ==
  // (defines en_dialog_table etc.)
  
 +#if defined(SM64COOPDX_CN_TEXT)
-+// Simplified-Chinese (iQue) text pack: real two-byte CN glyph data.
-+// Generated from the official n64decomp/sm64 text/cn sources.
++// Simplified-Chinese (iQue) text pack.
 +//
-+// Keeping the name dialog_text_<id> for the ROM-backed vanilla buffer lets
-+// dialog_assets.inc.c load into it unchanged; the CN arrays get their own
-+// cn_dialog_<id> names and apply_cn_text_pack() picks which one is live.
++// The dialog strings are NOT compiled in any more: they are read out of the
++// player's own 神游 rom at startup (src/game/cn_rom_assets.c). What
++// text/cn_dialogs_cn.inc.c defines now is a pair of macros per dialog --
++// cn_dialog_<id> and cn_dialog_lines_<id> -- that both forward to the loader.
++// Keeping the same names means apply_cn_text_pack() and every consumer below
++// are unchanged.
++//
++// Consequence: these are *expressions*, not array objects, so they cannot
++// appear in a static initialiser. Anything that used to bake them in (the
++// registry below, dialog_entry_orig_<id>'s initial value) now starts from the
++// vanilla buffer and is repointed once at startup.
++// Declared rather than included on purpose: this file is textconv'd and then
++// #included from segment2.c, and pulling in game/cn_rom_assets.h there drags
++// types.h in at a point where the surrounding headers are already half done --
++// it collides with stddef/pthread and fails to compile. Two prototypes are
++// cheaper than reworking the text pipeline.
++extern const u8 *cn_rom_dialog_str(u32 index);
++extern u32 cn_rom_dialog_lines(u32 index);
 +#include "text/cn_dialogs_cn.inc.c"
 +
 +// Vanilla ROM-backed text buffers (filled by dialog_assets.inc.c below).
@@ -2613,23 +2637,22 @@
  #define DEFINE_DIALOG(id, _1, _2, _3, _4, _len) \
      static u8 dialog_text_ ## id[_len] = { 0xFF };
 +#endif
-+
-+#include "dialogs.h"
-+
-+#undef DEFINE_DIALOG
  
+ #include "dialogs.h"
+ 
+ #undef DEFINE_DIALOG
++
 +#if defined(SM64COOPDX_CN_TEXT)
 +// Registry of every CN dialog buffer, so cn_is_cn_string() can tell "this
 +// pointer is CN text" without having to reach into the dialog entries (which
 +// change at runtime via apply_cn_text_pack and Lua overrides).
-+const u8 *const cn_dialog_registry[] = {
-+#define DEFINE_DIALOG(id, _1, _2, _3, _4, _5) cn_dialog_ ## id,
- #include "dialogs.h"
-+    NULL
-+};
++//
++// No longer const / statically initialised: the CN strings are wherever the
++// loader put them. apply_cn_text_pack() fills this before anything is drawn.
++const u8 *cn_dialog_registry[256];
 +#endif
- 
- #undef DEFINE_DIALOG
++
++#undef DEFINE_DIALOG
 +
 +#if defined(SM64COOPDX_CN_TEXT)
 +// Non-const so apply_cn_text_pack() can repoint .str at runtime
@@ -2641,9 +2664,13 @@
 +// whole box depends on it: the height scale, the page-break line and the
 +// scissor window are all derived from dialog->linesPerBox. Keeping the US value
 +// drew a box one line too short, so the last line of text hung out of it.
++//
++// .str starts on the vanilla buffer rather than NULL for the same reason: if
++// anything ever reads a dialog entry before the pack has been applied, drawing
++// English is a bad outcome, but dereferencing NULL is a crash.
 +#define DEFINE_DIALOG(id, unused, linesPerBox, leftOffset, width, _) \
 +    static struct DialogEntry dialog_entry_orig_ ## id = { \
-+        unused, linesPerBox, leftOffset, width, cn_dialog_ ## id, NULL, false \
++        unused, linesPerBox, leftOffset, width, dialog_text_ ## id, NULL, false \
 +    };
 +#else
  #define DEFINE_DIALOG(id, unused, linesPerBox, leftOffset, width, _) \
@@ -2664,7 +2691,7 @@
  #define DEFINE_DIALOG(id, _1, _2, _3, _4, _5) &dialog_entry_orig_ ## id,
  
  const struct DialogEntry *const seg2_dialog_original[] = {
-@@ -35,6 +85,19 @@
+@@ -35,6 +102,11 @@
  // == acts ==
  // (defines en_act_name_table etc.)
  
@@ -2673,6 +2700,14 @@
 +// apply_cn_text_pack() can switch the act-name table at runtime. The macro
 +// args are strings in the CN course source, so the CN path must not use them
 +// as array bounds.
+ #define COURSE_ACTS(id, name, a,b,c,d,e,f) \
+     static u8 act_name_ ## id ## _1[a] = { 0xFF }; \
+     static u8 act_name_ ## id ## _2[b] = { 0xFF }; \
+@@ -42,6 +114,15 @@
+     static u8 act_name_ ## id ## _4[d] = { 0xFF }; \
+     static u8 act_name_ ## id ## _5[e] = { 0xFF }; \
+     static u8 act_name_ ## id ## _6[f] = { 0xFF };
++#else
 +#define COURSE_ACTS(id, name, a,b,c,d,e,f) \
 +    static u8 act_name_ ## id ## _1[a] = { 0xFF }; \
 +    static u8 act_name_ ## id ## _2[b] = { 0xFF }; \
@@ -2680,92 +2715,57 @@
 +    static u8 act_name_ ## id ## _4[d] = { 0xFF }; \
 +    static u8 act_name_ ## id ## _5[e] = { 0xFF }; \
 +    static u8 act_name_ ## id ## _6[f] = { 0xFF };
-+#else
- #define COURSE_ACTS(id, name, a,b,c,d,e,f) \
-     static u8 act_name_ ## id ## _1[a] = { 0xFF }; \
-     static u8 act_name_ ## id ## _2[b] = { 0xFF }; \
-@@ -42,6 +105,7 @@
-     static u8 act_name_ ## id ## _4[d] = { 0xFF }; \
-     static u8 act_name_ ## id ## _5[e] = { 0xFF }; \
-     static u8 act_name_ ## id ## _6[f] = { 0xFF };
 +#endif
  
  #define SECRET_STAR(id, name)
  #define CASTLE_SECRET_STARS(str)
-@@ -55,20 +119,172 @@
+@@ -55,20 +136,166 @@
  #undef COURSE_ACTS
  #undef EXTRA_TEXT
  
-+#if defined(SM64COOPDX_CN_TEXT)
-+// COURSE_BOB etc. are enum constants (not macros), so they cannot be pasted
-+// with ##. CN_CID_<token> (defined in define_courses.inc.c) expands to the
-+// lower-case name used by the generated CN arrays. Three macro levels are
-+// needed because the middle one is only reached as a ## operand.
-+#define CN_ACT_PTR__(id, i) ((u8 *)(void *)&cn_course_ ## id ## _ ## i)
-+#define CN_ACT_PTR_(id, i)  CN_ACT_PTR__(id, i)
-+#define CN_ACT_PTR(id, i)   CN_ACT_PTR_(CN_CID_ ## id, i)
++// The CN act names are no longer compiled in: they are read out of the player's
++// rom at startup (src/game/cn_rom_assets.c) and overlaid by
++// apply_cn_text_pack(). Both modes therefore build this table the same way --
++// from the ROM-backed vanilla buffers -- which is also what a missing rom shows.
  #define COURSE_ACTS(id, name, a,b,c,d,e,f) \
 -    act_name_ ## id ## _1, act_name_ ## id ## _2, act_name_ ## id ## _3, \
 -    act_name_ ## id ## _4, act_name_ ## id ## _5, act_name_ ## id ## _6,
-+    CN_ACT_PTR(id, 1), CN_ACT_PTR(id, 2), CN_ACT_PTR(id, 3), \
-+    CN_ACT_PTR(id, 4), CN_ACT_PTR(id, 5), CN_ACT_PTR(id, 6),
-+#else
-+#define COURSE_ACTS(id, name, a,b,c,d,e,f) \
+-#define EXTRA_TEXT(id, str) extra_text_ ## id,
 +    (u8 *)(void *)act_name_ ## id ## _1, (u8 *)(void *)act_name_ ## id ## _2, (u8 *)(void *)act_name_ ## id ## _3, \
 +    (u8 *)(void *)act_name_ ## id ## _4, (u8 *)(void *)act_name_ ## id ## _5, (u8 *)(void *)act_name_ ## id ## _6,
-+#endif
 +#define EXTRA_TEXT(id, str) (u8 *)(void *)extra_text_ ## id,
 +
 +// Active table. Non-const so apply_cn_text_pack() can swap each slot between
-+// the CN array and the vanilla ROM-backed buffer.
++// the loader's CN name and the vanilla ROM-backed buffer.
 +u8* seg2_act_name_table[] = {
 +#include "courses.h"
 +    NULL
 +};
 +
-+// Vanilla (ROM-backed) mirror: always the "off" side of the switch. In
-+// non-CN builds this is identical to seg2_act_name_table.
++// Vanilla (ROM-backed) mirror: the "off" side of the switch. In non-CN builds
++// this is identical to seg2_act_name_table.
 +//
-+// The macro redefinition below is load-bearing, not redundant with the #else
-+// branch above. Both this table and seg2_act_name_table[] expand the *same*
-+// courses.h, and the active table's COURSE_ACTS (line 123) resolves to the CN
-+// pointers in a CN build. Without an explicit #undef + redefinition here, this
-+// "vanilla" mirror would silently be built from the CN pointers too, making
-+// both sides of the runtime switch identical: apply_cn_text_pack() would
-+// install CN act names whether the pack is on or off, and -- because
-+// cn_is_cn_string() only trusts these pointers while gCnTextPackActive is set
-+// -- the same bytes would then be walked as vanilla single-byte text with the
-+// switch off, stopping at the first 0xFF.
++// The redefinition below is load-bearing, not redundant with the one above:
++// both tables expand the *same* courses.h, so apply_cn_text_pack() needs a
++// second, independent list of the vanilla pointers to restore when the pack is
++// switched off. (Up to the runtime-loading change the active table started on
++// the CN pointers and this list was the only place the vanilla ones survived;
++// now the two are byte-identical, and the list is simply the restore list.)
 +#undef COURSE_ACTS
 +#undef EXTRA_TEXT
 +#define COURSE_ACTS(id, name, a,b,c,d,e,f) \
 +    (u8 *)(void *)act_name_ ## id ## _1, (u8 *)(void *)act_name_ ## id ## _2, (u8 *)(void *)act_name_ ## id ## _3, \
 +    (u8 *)(void *)act_name_ ## id ## _4, (u8 *)(void *)act_name_ ## id ## _5, (u8 *)(void *)act_name_ ## id ## _6,
 +#define EXTRA_TEXT(id, str) (const u8 *)(void *)extra_text_ ## id,
-+
-+const u8 *const cn_act_name_vanilla[] = {
-+#include "courses.h"
-+    NULL
-+};
-+
-+#if defined(SM64COOPDX_CN_TEXT)
-+// CN mirror: the "on" side of the switch.
-+#undef COURSE_ACTS
-+#undef EXTRA_TEXT
-+const u8 *const cn_act_name_cn[] = {
-+#define COURSE_ACTS(id, name, a,b,c,d,e,f) \
-+    CN_ACT_PTR(id, 1), CN_ACT_PTR(id, 2), CN_ACT_PTR(id, 3), \
-+    CN_ACT_PTR(id, 4), CN_ACT_PTR(id, 5), CN_ACT_PTR(id, 6),
- #define EXTRA_TEXT(id, str) extra_text_ ## id,
  
 -const u8* seg2_act_name_table[] = {
++const u8 *const cn_act_name_vanilla[] = {
  #include "courses.h"
      NULL
  };
  
 +#undef COURSE_ACTS
 +#undef EXTRA_TEXT
-+#endif
 +
 +// The "original" table keeps the vanilla pointers in every build so Lua and
 +// the dialog restore path always see unmodified text.
@@ -2802,6 +2802,11 @@
 +// (hosting or joining a room calls smlua_init() -> smlua_text_utils_reset_all()).
 +// If you ever make these pointers heap-allocated, update that ownership set too.
 +void apply_cn_text_pack(void) {
++    // Filled below, one per dialog, in dialogs.h order. The array is sized
++    // generously (256 entries for 170 dialogs) and NULL-terminated so
++    // cn_is_cn_string() can walk it without needing the count.
++    u32 cnRegIdx = 0;
++
 +    // dialogs: text pointer AND page height. Both have to follow the same
 +    // switch -- a CN string paginated with the US line count overflows the box.
 +// NOTE: the third macro parameter must NOT be named `linesPerBox`. The body
@@ -2811,9 +2816,12 @@
 +// would fail to compile. Hence `_lines`.
 +#define DEFINE_DIALOG(id, _1, _lines, _3, _4, _5) \
 +    dialog_entry_orig_ ## id.str = gCnTextPackActive ? cn_dialog_ ## id : dialog_text_ ## id; \
-+    dialog_entry_orig_ ## id.linesPerBox = gCnTextPackActive ? cn_dialog_lines_ ## id : (_lines);
++    dialog_entry_orig_ ## id.linesPerBox = gCnTextPackActive ? cn_dialog_lines_ ## id : (_lines); \
++    cn_dialog_registry[cnRegIdx++] = (u8 *)cn_dialog_ ## id;
 +
 +#include "dialogs.h"
++
++    cn_dialog_registry[cnRegIdx] = NULL;
 +
 +#undef DEFINE_DIALOG
 +
@@ -2823,8 +2831,12 @@
 +        extern u8 *seg2_act_name_table[];
 +        extern const u8 *const cn_course_name_vanilla[];
 +        extern const u8 *const cn_act_name_vanilla[];
-+        extern const u8 *const cn_course_name_cn[];
-+        extern const u8 *const cn_act_name_cn[];
++        // Read out of the player's rom by src/game/cn_rom_assets.c. Declared
++        // rather than included for the same reason as the dialog accessors
++        // above: this file is textconv'd and pulled into segment2.c, where
++        // dragging in game/cn_rom_assets.h breaks the include order.
++        extern const u8 *cn_rom_course_name(u32 slot);
++        extern const u8 *cn_rom_act_name(u32 index);
 +        u32 i;
 +
 +        // Hard upper bounds: die loudly instead of walking off the end of the
@@ -2834,6 +2846,8 @@
 +        #define CN_COURSE_SLOTS 26
 +        #define CN_ACT_SLOTS    200
 +
++        // The vanilla buffers first: this is what the pack shows when it is
++        // off, and it is the starting point every toggle returns to.
 +        for (i = 0; i < CN_COURSE_SLOTS && cn_course_name_vanilla[i] != NULL; i++) {
 +            seg2_course_name_table[i] = (u8 *)cn_course_name_vanilla[i];
 +        }
@@ -2842,12 +2856,20 @@
 +        }
 +
 +        if (gCnTextPackActive) {
-+            // overlay the CN pointers on top of the vanilla defaults
-+            for (i = 0; i < CN_COURSE_SLOTS && cn_course_name_cn[i] != NULL; i++) {
-+                seg2_course_name_table[i] = (u8 *)cn_course_name_cn[i];
++            // Overlay the rom's names. Without a rom every call returns NULL and
++            // the vanilla pointers stay -- which is exactly the intended
++            // behaviour: no cartridge, no Chinese text.
++            //
++            // The act overlay stops at 90 (15 stages x 6 acts). Slots 90..96 are
++            // the port's extra texts, which the Lua text layer addresses by
++            // index and expects to be the vanilla buffers.
++            for (i = 0; i < CN_COURSE_SLOTS; i++) {
++                const u8 *p = cn_rom_course_name(i);
++                if (p != NULL) { seg2_course_name_table[i] = (u8 *)p; }
 +            }
-+            for (i = 0; i < CN_ACT_SLOTS && cn_act_name_cn[i] != NULL; i++) {
-+                seg2_act_name_table[i] = (u8 *)cn_act_name_cn[i];
++            for (i = 0; i < 90; i++) {
++                const u8 *p = cn_rom_act_name(i);
++                if (p != NULL) { seg2_act_name_table[i] = (u8 *)p; }
 +            }
 +        }
 +
