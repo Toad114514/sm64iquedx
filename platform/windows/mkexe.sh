@@ -94,26 +94,57 @@ printf 'ISCC: %s\n' "$iscc"
 printf '源目录: %s\n' "$(win_path "$dist")"
 printf '版本: %s  架构: %s\n' "$version" "$arch"
 
-# 中文界面：Inno Setup 6 自带 Languages\ChineseSimplified.isl。按 ISCC 的**同级
-# 目录**去找，不依赖 ISPP 的预定义变量（那个名字各版本不一致，赌不起）。
-# 找不到就退回英文界面 —— 编译失败比界面是英文糟糕得多。
-iscc_lang_dir=$(dirname "$iscc")/Languages
-chinese=/DWithChinese=0
-if [ -f "$iscc_lang_dir/ChineseSimplified.isl" ]; then
-    chinese=/DWithChinese=1
+# 中文界面。官方 Inno Setup 的 Languages\ 里**没有**简体中文（它只带 26 种官方
+# 语言），所以仓库自带一份（来自 jrsoftware/issrc 的
+# Files/Languages/ChineseSimplified.isl，UTF-8 + CRLF，无 BOM）。
+# 优先级：编译器目录里用户自己装的那份（版本一定和他的编译器对得上）→ 仓库自带。
+# 都没有就用英文界面 —— 编译失败比界面是英文糟糕得多。
+cn_lang=""
+for c in "$(dirname "$iscc")/Languages/ChineseSimplified.isl" \
+         "$repo/platform/windows/ChineseSimplified.isl"; do
+    if [ -f "$c" ]; then
+        cn_lang=$c
+        break
+    fi
+done
+if [ -n "$cn_lang" ]; then
+    printf '界面语言: 简体中文（%s）\n' "$cn_lang"
 else
-    printf '[!] %s 里没有 ChineseSimplified.isl，安装向导用英文界面\n' "$iscc_lang_dir" >&2
+    printf '[!] 找不到 ChineseSimplified.isl，安装向导用英文界面\n' >&2
 fi
 
-# /D 的值里可能有空格：整个参数由 shell 合成一项再交给 ISCC，ISCC 自己按
-# `=` 之后取到参数末尾，不会再切词。
-# shellcheck disable=SC2086
-"$iscc" /Qp \
-    "$chinese" \
-    "/DMyAppVersion=$version" \
-    "/DMySourceDir=$(win_path "$dist")" \
-    "/DMyOutputDir=$(win_path "$repo")" \
-    "$(win_path "$iss")"
+# MSYS2 会把「/D 开头的参数」当成 POSIX 路径改写（/DMyAppVersion=1.5.1 →
+# D:/MyAppVersion=1.5.1），ISCC 于是把它当成第二个脚本文件名，只回一句
+# "You may not specify more than one script filename."（CI 上就是这么红的）。
+# 路径已经由 cygpath 转好了，所以这里把自动转换整个关掉。
+MSYS2_ARG_CONV_EXCL='*'
+export MSYS2_ARG_CONV_EXCL
+
+# 参数用 `set --` 拼，不用数组（POSIX sh 没有数组）：/D 的值里可能有空格，
+# 所以每个参数各自被双引号包住，ISCC 按 `=` 之后取到参数末尾，不会再切词。
+# iscc_run_lang=cn 时带上中文语言文件；=en 只出英文界面（编译失败时的退路）
+iscc_run() {
+    set -- /Qp "/DMyAppVersion=$version" \
+           "/DMySourceDir=$(win_path "$dist")" \
+           "/DMyOutputDir=$(win_path "$repo")"
+    if [ "${iscc_run_lang:-cn}" = cn ] && [ -n "$cn_lang" ]; then
+        set -- "$@" "/DMyCnLang=$(win_path "$cn_lang")"
+    fi
+    set -- "$@" "$(win_path "$iss")"
+    "$iscc" "$@"
+}
+
+iscc_rc=0
+iscc_run || iscc_rc=$?
+if [ "$iscc_rc" -ne 0 ] && [ -n "$cn_lang" ]; then
+    # 语言文件比编译器新时会报 "Unknown message name"。宁可界面是英文，
+    # 也别让整个安装包产不出来 —— 但第一次的错误原文已经打出来了。
+    printf '[!] 带中文界面编译失败（语言文件可能比编译器新），退回英文界面重试\n' >&2
+    iscc_run_lang=en
+    iscc_rc=0
+    iscc_run || iscc_rc=$?
+fi
+[ "$iscc_rc" -eq 0 ] || exit 1
 
 out=$repo/sm64iquedx-${version}-windows-${arch}-setup.exe
 if [ -f "$out" ]; then

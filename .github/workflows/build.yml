@@ -315,6 +315,31 @@ jobs:
           ls -la dist | head -20 || true
           ls -la ./*.exe ./*.zip 2>/dev/null || true
 
+      # ISCC 编译通过只说明脚本语法没问题，装得对不对没人验。静默装到一个
+      # 临时目录、检查主程序在不在、再静默卸掉 —— 三条都过了才算向导能用。
+      # /DIR 是原生程序参数，必须是 Windows 路径。
+      - name: 冒烟测试安装向导（静默安装 → 检查 → 卸载）
+        run: |
+          set -e
+          setup=$(ls ./*-setup.exe | head -n 1)
+          echo "被测安装包：${setup}"
+          target="$PWD/smoke-install"
+          rm -rf "$target"
+          ./"$setup" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART "/DIR=$(cygpath -w "$target")"
+          test -f "$target/sm64coopdx.exe" || { echo "装完了但没有 sm64coopdx.exe"; exit 1; }
+          test -f "$target/unins000.exe"    || { echo "装完了但没有卸载程序"; exit 1; }
+          test -d "$target/dynos"           || { echo "装完了但没有 dynos 目录（[Files] 递归没生效）"; exit 1; }
+          echo "安装成功，开始卸载"
+          "$target/unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+          # 卸载器是异步的，等它真的消失（最多 30 秒）
+          i=0
+          while [ -f "$target/sm64coopdx.exe" ] && [ "$i" -lt 30 ]; do
+            sleep 1; i=$((i + 1))
+          done
+          [ -f "$target/sm64coopdx.exe" ] && { echo "卸载后主程序还在"; exit 1; }
+          echo "安装 / 卸载都正常"
+          rm -rf "$target" || true
+
       - name: 上传安装向导（setup.exe）
         uses: actions/upload-artifact@v4
         with:

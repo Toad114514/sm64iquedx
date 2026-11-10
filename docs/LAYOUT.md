@@ -156,7 +156,7 @@ scripts/apply_patches.sh <pc|android|android-cn> <上游干净 checkout> [--fron
 | `platform/darwin/` | `Info.plist.in` + `mkmac.sh` | macOS 的 `.app` / `.dmg` / `.pkg` / `.zip` |
 | `platform/freedesktop/` | `*.desktop` + 图标 + `install.sh` | 非打包发行版共用：启动器与图标 |
 | `platform/portable/` | `mkzip.sh` | 便携 zip（三平台通用，解压即玩） |
-| `platform/windows/` | `sm64coopdx-iquedx.iss` + `mkexe.sh` | Inno Setup 安装向导（`setup.exe`），只能在 Windows 上打 |
+| `platform/windows/` | `sm64coopdx-iquedx.iss` + `mkexe.sh` + `ChineseSimplified.isl` | Inno Setup 安装向导（`setup.exe`），只能在 Windows 上打；语言文件是仓库自带的（官方安装包不带简体中文） |
 
 ### platform/DEBIAN
 
@@ -246,10 +246,20 @@ sh platform/windows/mkexe.sh --check                  # 只探测 ISCC 在不在
   所以是逐条判断、不拼接。
 - `.iss` 必须是 **UTF-8 带 BOM**：Inno Setup 6 只在看到 BOM 时才按 UTF-8 解析，
   否则中文界面全变乱码，而且**编译不报错**。`mkexe.sh` 会查首三个字节，自测里也有一条守着。
-- 传参用 `/DMyAppVersion` / `/DMySourceDir` / `/DMyOutputDir`。路径要先用 `cygpath -w` 转成
-  Windows 形式，否则 ISCC 会把 `/c/...` 当成命令行开关。
-- `Languages\ChineseSimplified.isl` 由 shell 探测后以 `/DWithChinese=1` 传入，缺了退回英文界面，
-  不用 ISPP 的预定义变量（那个名字各版本不一致）。
+- 传参用 `/DMyAppVersion` / `/DMySourceDir` / `/DMyOutputDir` / `/DMyCnLang`。路径要先用
+  `cygpath -w` 转成 Windows 形式，否则 ISCC 会把 `/c/...` 当成命令行开关。
+- **调 ISCC 前必须 `export MSYS2_ARG_CONV_EXCL='*'`**：MSYS2 会把 `/D` 开头的参数当 POSIX
+  路径改写（`/DMyAppVersion=1.5.1` → `D:/MyAppVersion=1.5.1`），ISCC 就把它当成第二个脚本
+  文件名，只回一句 `You may not specify more than one script filename.`。路径本来就由
+  `cygpath` 转好了，自动转换必须整个关掉。
+- **官方 Inno Setup 不带简体中文**（`Languages\` 里只有 26 种官方语言），所以仓库自带
+  `platform/windows/ChineseSimplified.isl`（取自 jrsoftware/issrc 的 `Files/Languages/`，
+  UTF-8 + CRLF、无 BOM）。查找顺序：用户自己装在编译器目录的那份 → 仓库自带 → 都没有才用
+  英文界面；命中后以 `/DMyCnLang=<绝对路径>` 传入。
+- 语言文件比编译器新时会报 `Unknown message name`，`mkexe.sh` 因此会**丢掉语言文件重试一次**
+  （英文界面），第一次的报错原文照旧打出来 —— 宁可界面是英文，也别整个包产不出来。
+- CI 的 Windows job 打完包还会**静默安装 → 检查主程序/dynos/卸载器 → 静默卸载**，
+  编译通过不等于装得上，这一步才验得到 `[Files]` 递归和卸载程序。
 
 
 ## GitHub Actions

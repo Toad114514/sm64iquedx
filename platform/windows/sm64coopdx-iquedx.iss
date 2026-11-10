@@ -2,7 +2,9 @@
 ;
 ; 由 platform/windows/mkexe.sh 调用 ISCC 编译：
 ;   ISCC.exe /Qp /DMyAppVersion=1.5.1 /DMySourceDir=C:\...\dist
-;                /DMyOutputDir=C:\...\sm64iquedx  platform/windows/sm64coopdx-iquedx.iss
+;                /DMyOutputDir=C:\...\sm64iquedx /DMyCnLang=C:\...\ChineseSimplified.isl
+;                platform/windows/sm64coopdx-iquedx.iss
+; （/DMyCnLang 只在找到简体中文语言文件时才传。）
 ;
 ; ⚠️ 本文件是 UTF-8 **带 BOM**，别去掉：Inno Setup 6 只在看到 BOM 时才把 .iss
 ;    当 UTF-8 解析，否则按系统 ANSI 代码页解释，下面所有中文会变成乱码。
@@ -52,12 +54,13 @@ SetupLogging=yes
 ; 装完不需要立刻重启
 RestartIfNeededByRun=no
 
-; 简体中文界面：Inno Setup 6 的安装目录里自带 Languages\ChineseSimplified.isl，
-; 由 mkexe.sh 探测后传 /DWithChinese=1。某个机器上的编译器没带这个文件时
-; 退回英文界面，而不是整个编译失败。
-#ifdef WithChinese
+; 简体中文界面：**官方 Inno Setup 不带简体中文**（Languages\ 里只有 26 种官方
+; 语言），所以仓库在 platform/windows/ChineseSimplified.isl 自带一份（取自
+; jrsoftware/issrc 的 Files/Languages/）。由 mkexe.sh 找到后传
+; /DMyCnLang=<绝对路径>；找不到就退回英文界面，而不是整个编译失败。
+#ifdef MyCnLang
 [Languages]
-Name: "cn"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+Name: "cn"; MessagesFile: "{#MyCnLang}"
 Name: "en"; MessagesFile: "compiler:Default.isl"
 #else
 [Languages]
