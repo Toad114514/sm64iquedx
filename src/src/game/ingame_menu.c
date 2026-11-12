@@ -1610,17 +1610,33 @@ void render_dialog_box_type(struct DialogEntry *dialog, s8 linesPerBox) {
     if (dialogWidth < gDialogMinWidth) dialogWidth = gDialogMinWidth;
     create_dl_translation_matrix(MENU_MTX_PUSH, X_VAL1, Y_VAL1, 0);
 
-    // iQue gives the box one extra line of height on top of drawing one line
-    // fewer per page (see totalLines below). That pairing is the whole trick:
-    // the taller 16px CJK glyphs need the room, and the shorter page keeps the
-    // text from filling it. Both halves must follow the same runtime decision
-    // as the strings, otherwise the CN text overflows the US-sized box -- or,
-    // in the mod-replaced case, English text sits in a box a line too tall.
-    f32 boxLines = (f32) linesPerBox;
+    // The background box is a 130x80 quad (see shade_screen()), stretched in y
+    // so its 80 units cover the text window. Vanilla writes that stretch as
+    // `linesPerBox / Y_VAL2`, and Y_VAL2 exists only so the result equals
+    //     linesPerBox * lineHeight / 80
+    // with lineHeight 16 (US/EU) or 20 (JP/SH): 80 units of box per 80px of
+    // text, plus a flat 0.1 that leaves 8px of clearance under the last line.
+    //
+    // Written in pixels rather than as `linesPerBox / Y_VAL2` because the line
+    // height now depends on the string, not on the build, and the two forms
+    // only agree at the vanilla page heights. With 6 CJK lines the old form
+    // gives 7/5 + 0.1 = 1.5, i.e. exactly 120px of box for 120px of text --
+    // zero clearance, so the bottom of the last line (and its drop shadow)
+    // hangs out of the box. The real answer is 6*20/80 + 0.1 = 1.6 = 128px.
+    //
+    // Same runtime decision as the strings, like everything else here: a
+    // Lua-replaced English dialog keeps the US line height and the US box.
+    f32 lineHeight = 16.0f;
+#if defined(VERSION_JP) || defined(VERSION_SH)
+    lineHeight = 20.0f;
+#endif
+#if defined(SM64COOPDX_CN_TEXT)
     if (CN_DIALOG_LAYOUT()) {
-        boxLines += 1.0f;
+        lineHeight = 20.0f;
     }
-    create_dl_scale_matrix(MENU_MTX_NOPUSH, dialogWidth / 130, (boxLines / Y_VAL2) + 0.1, 1.0f);
+#endif
+    create_dl_scale_matrix(MENU_MTX_NOPUSH, dialogWidth / 130,
+                           ((f32) linesPerBox * lineHeight) / 80.0f + 0.1f, 1.0f);
 
     gSPDisplayList(gDisplayListHead++, dl_draw_text_bg_box);
     gSPPopMatrix(gDisplayListHead++, G_MTX_MODELVIEW);
@@ -1700,6 +1716,21 @@ void render_generic_dialog_char_at_pos(struct DialogEntry *dialog, s16 x, s16 y,
 #define CN_DIALOG_LINE_H() (CN_DIALOG_LAYOUT() ? 20 : Y_VAL3)
 #else
 #define CN_DIALOG_LINE_H() (Y_VAL3)
+#endif
+
+// Lines one page holds. US pages break after `linesPerBox` lines
+// (`totalLines = linesPerBox + 1`, the +1 being the exclusive end); iQue keeps
+// that formula's shape but passes `linesPerBox` itself, so its pages are one
+// line shorter -- the freed line is spent on the one-line-taller box.
+//
+// Everything that measures "one page" must use this, not linesPerBox: the
+// scissor window (a window one line taller lets the next page slide into the
+// bottom of the box mid-scroll), the scroll distance (one line too far and the
+// text jumps back when the page flips) and the line index under the scroll.
+#if defined(SM64COOPDX_CN_TEXT)
+#define CN_DIALOG_PAGE_LINES(linesPerBox, cn) (((cn) && (linesPerBox) > 1) ? (linesPerBox) - 1 : (linesPerBox))
+#else
+#define CN_DIALOG_PAGE_LINES(linesPerBox, cn) (linesPerBox)
 #endif
 
 #ifdef VERSION_EU
@@ -1890,21 +1921,19 @@ void handle_dialog_text_and_pages(s8 colorMode, struct DialogEntry *dialog, s8 l
     s16 linePos = 0;
 #endif
 
+    // Page length, from the same helper the window and the scroll use, so the
+    // break, the scissor and the roll can never count a different number of
+    // lines (see CN_DIALOG_PAGE_LINES).
+    //
+    // `cn` (the encoding of the string about to be drawn) rather than the pack
+    // switch: a Lua-replaced English dialog must still be paginated like
+    // vanilla, or its last line ends up alone on a second page.
     if (gDialogBoxState == DIALOG_STATE_HORIZONTAL) {
         // If scrolling, consider the number of lines for both
         // the current page and the page being scrolled to.
-        //
-        // iQue shows one line fewer than US on every page (and in the
-        // two-page scroll case). Together with the taller box and the 20px
-        // line spacing this is what makes the CJK text breathe instead of
-        // spilling out of the box.
-        //
-        // `cn` (the encoding of the string about to be drawn) rather than the
-        // pack switch: a Lua-replaced English dialog must still be paginated
-        // like vanilla, or its last line ends up alone on a second page.
-        totalLines = cn ? (linesPerBox * 2 - 1) : (linesPerBox * 2 + 1);
+        totalLines = CN_DIALOG_PAGE_LINES(linesPerBox, cn) * 2 + 1;
     } else {
-        totalLines = cn ? linesPerBox : (linesPerBox + 1);
+        totalLines = CN_DIALOG_PAGE_LINES(linesPerBox, cn) + 1;
     }
 
     gSPDisplayList(gDisplayListHead++, dl_ia_text_begin);
@@ -1918,7 +1947,19 @@ void handle_dialog_text_and_pages(s8 colorMode, struct DialogEntry *dialog, s8 l
 #ifdef VERSION_EU
         gDialogY -= gDialogScrollOffsetY;
 #else
+        // The interpolator draws between sDialogOffsetPrev and sDialogOffset,
+        // i.e. up to one logic step (linesPerBox * 2 px) ahead of the offset the
+        // scroll state machine has reached. That step does not divide a page,
+        // so on the last frame it would run past the page break and the flip
+        // would jerk the text back by the remainder. Clamping the lookahead to
+        // one page makes the final frame land exactly on the next page's first
+        // line, which is what the redraw that follows shows.
+        s32 pageHeight = CN_DIALOG_PAGE_LINES(linesPerBox, cn) * CN_DIALOG_LINE_H();
+
         sDialogOffset = gDialogScrollOffsetY + dialog->linesPerBox * 2;
+        if (sDialogOffset > pageHeight) {
+            sDialogOffset = pageHeight;
+        }
         sDialogOffsetPrev = gDialogScrollOffsetY;
         sDialogOffsetPos = gDisplayListHead;
         create_dl_translation_matrix(MENU_MTX_NOPUSH, 0, (f32) sDialogOffsetPrev, 0);
@@ -2429,6 +2470,38 @@ void render_dialog_entries(void) {
                                       : (const u8 *) segmented_to_virtual(dialog->str));
 #endif
 
+    // Line pitch, page length, and the same two numbers folded into the
+    // scissor / scroll arithmetic.
+    //
+    // DIAG_VAL4 exists only to turn "80 / DIAG_VAL4" into the line height:
+    // JP/SH use 80/4 = 20, US/EU use 80/5 = 16. So `rows * 80 / DIAG_VAL4` is
+    // "rows * pitch", and every window below is a count of *rows*, not of
+    // linesPerBox. Compiling for US and then drawing 20px-pitch CJK glyphs into
+    // a `linesPerBox * 16` window crops the bottom of the last line as soon as
+    // `linesPerBox > 4` -- with 5 lines the text is (5-1)*20 + 16 = 96px tall
+    // while the scissor only allows 80. That is upstream issue #2.
+    //
+    // The row count is the *page* length, not linesPerBox: iQue pages are one
+    // line shorter (see CN_DIALOG_PAGE_LINES). Using linesPerBox here builds a
+    // window/scroll one line taller than the text that flows through it, so the
+    // first line of the next page slides into the bottom of the box during the
+    // scroll and the box's lower border slices through it -- and the scroll then
+    // runs a whole line past the page break, so the text jerks backwards when
+    // the page flips.
+    //
+    // Chosen from CN_DIALOG_LAYOUT(), like every other geometry value here: a
+    // Lua-replaced English dialog keeps the US pitch and the US window even
+    // when the pack is on.
+    s32 diagPitch = DIAG_VAL1;
+    s32 diagRowsPerBox = DIAG_VAL4;
+    s32 diagPageLines = CN_DIALOG_PAGE_LINES(dialog->linesPerBox, CN_DIALOG_LAYOUT());
+#if defined(SM64COOPDX_CN_TEXT)
+    if (CN_DIALOG_LAYOUT()) {
+        diagPitch = 20;
+        diagRowsPerBox = 4;
+    }
+#endif
+
 #ifdef VERSION_EU
     gDialogX = 0;
     gDialogY = 0;
@@ -2477,13 +2550,15 @@ void render_dialog_entries(void) {
         case DIALOG_STATE_HORIZONTAL:
             gDialogScrollOffsetY += dialog->linesPerBox * 2;
 
-            if (gDialogScrollOffsetY >= dialog->linesPerBox * DIAG_VAL1) {
+            // The scroll ends exactly when one page has rolled past, so the
+            // last frame is indistinguishable from the redraw of the next page.
+            if (gDialogScrollOffsetY >= diagPageLines * diagPitch) {
                 gDialogTextPos = gLastDialogPageStrPos;
                 gDialogBoxState = DIALOG_STATE_VERTICAL;
                 gDialogScrollOffsetY = 0;
             }
 #if !defined(VERSION_JP)
-            lowerBound = (gDialogScrollOffsetY / DIAG_VAL1) + 1;
+            lowerBound = (gDialogScrollOffsetY / diagPitch) + 1;
 #endif
             break;
         case DIALOG_STATE_CLOSING:
@@ -2518,13 +2593,13 @@ void render_dialog_entries(void) {
     render_dialog_box_type(dialog, dialog->linesPerBox);
 
 #ifdef VERSION_EU
-    u32 scissorHeight = ensure_nonnegative((240 - dialog->width) + ((dialog->linesPerBox * 80) / DIAG_VAL4) / gDialogBoxScale);
+    u32 scissorHeight = ensure_nonnegative((240 - dialog->width) + ((diagPageLines * 80) / diagRowsPerBox) / gDialogBoxScale);
 #else
-    u32 scissorHeight = ensure_nonnegative(240 + ((dialog->linesPerBox * 80) / DIAG_VAL4) - dialog->width);
+    u32 scissorHeight = ensure_nonnegative(240 + ((diagPageLines * 80) / diagRowsPerBox) - dialog->width);
 #endif
     u32 scissorY = ensure_nonnegative(DIAG_VAL2 - dialog->width);
     if (gOverrideDialogPos) {
-        scissorHeight = ensure_nonnegative(((dialog->linesPerBox * 80) / DIAG_VAL4) + gDialogOverrideY + 5);
+        scissorHeight = ensure_nonnegative(((diagPageLines * 80) / diagRowsPerBox) + gDialogOverrideY + 5);
         scissorY = ensure_nonnegative(gDialogOverrideY + 5);
     }
 
