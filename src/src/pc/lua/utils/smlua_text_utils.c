@@ -253,12 +253,42 @@ const struct DialogEntry* smlua_text_utils_dialog_get_unmodified(enum DialogId d
     return segmented_to_virtual(dialogTableOrg[dialogId]);
 }
 
+// True when this call cannot change anything: same text, same layout.
+//
+// Why it has to exist: several mods (Character Select, notably) read
+// `DialogEntry.text` in HOOK_ON_DIALOG and feed it straight back into
+// dialog_replace(), optionally through a gsub that matches nothing. That is
+// semantically a no-op, but the pack cannot survive the round trip on the byte
+// level -- a CN string is a two-byte token stream, and
+// convert_string_sm64_to_ascii() deliberately reports it as an empty string
+// (there is no ASCII image of it). So the mod would hand us "" and
+// smlua_text_utils_convert() would install a genuinely empty string, replacing
+// the Chinese text with nothing: the dialog box then draws with the right
+// height and no glyphs at all, which is what a signpost looked like with
+// Character Select enabled (upstream issue #3, follow-up).
+//
+// Comparing against the live entry instead of against "did the pack produce
+// this" keeps it honest: if a mod really does want different text, the strings
+// differ and the override goes through as before.
+static bool dialog_replace_is_noop(const struct DialogEntry *dialog, u32 unused,
+                                   s8 linesPerBox, s16 leftOffset, s16 width,
+                                   const char *str) {
+    if (dialog->text == NULL || str == NULL) { return false; }
+    return dialog->unused == unused
+        && dialog->linesPerBox == linesPerBox
+        && dialog->leftOffset == leftOffset
+        && dialog->width == width
+        && strcmp(dialog->text, str) == 0;
+}
+
 void smlua_text_utils_dialog_replace(enum DialogId dialogId, UNUSED u32 unused, s8 linesPerBox, s16 leftOffset, s16 width, const char* str) {
     if (!IS_VALID_DIALOG(dialogId)) { return; }
 
     struct DialogEntry *dialog = smlua_text_utils_dialog_get(dialogId);
 
     if (!dialog) { return; }
+
+    if (dialog_replace_is_noop(dialog, unused, linesPerBox, leftOffset, width, str)) { return; }
 
     if (dialog->replaced) {
         free((u8*)dialog->str);
