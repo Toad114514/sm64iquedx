@@ -17,6 +17,9 @@ name: Build
 #     djui_modern 开启(-d) | 关闭
 #   push / PR 触发时三个输入不存在，走默认「汉化版 + 前端 + djui_modern」，
 #   与加这些选项之前的行为完全一致。
+#   ⚠️ djui_modern 只能配汉化版：模块的字体图集 #include 汉化上游自带的
+#      src/pc/djui/cn_glyphs.h。所以「原版 + djui_modern」这组输入会在 install.sh
+#      开头被直接拒绝（提示加 -c 或去掉 -d），不会白克隆一遍再死在编译里。
 #   -p no   只编译，不打任何格式的包
 #   -po     只打包（跳过克隆/补丁/编译，直接吃上一步留下的 build-iquedx/upstream）
 #
@@ -42,7 +45,7 @@ on:
         type: boolean
         default: true
       djui_modern:
-        description: '应用 djui_modern 界面模块'
+        description: '应用 djui_modern 界面模块（仅汉化版上游；选「原版」时会被 install.sh 拒绝）'
         type: boolean
         default: true
   push:

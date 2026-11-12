@@ -101,7 +101,7 @@ theirs = 本仓库 src/（PC 终态）
 
 ## cn_extra/ 是「新增文件」，只补缺不覆盖
 
-`cn_extra/` 收录 14 个上游不存在的文件，其中包括 **`lang/Chinese.ini`**（PC 上游 `lang/` 只有 11 种语言，没有中文；汉化版 Android 则有自己的一份）和 **`src/pc/djui/cn_glyphs.h`**（见下节）。因此应用时逐个文件判断：目标已存在就跳过，只补缺。
+`cn_extra/` 收录 15 个上游不存在的文件，其中 **`lang/Chinese.ini`** 在 PC 上游 `lang/` 里没有（只有 11 种语言；汉化版 Android 则有自己的一份）。因此应用时逐个文件判断：目标已存在就跳过，只补缺。
 
 ```bash
 # scripts/apply_patches.sh 内部语义
@@ -123,7 +123,7 @@ theirs = 本仓库 src/（PC 终态）
 
 实测（基线取自 `upstream.txt`，桌面双向、Android 两个上游各一遍）：`0001`/`0002`/`0005` 与 djui_modern 的 9 个桌面补丁、2 个 Android 构建补丁，**正向反向都干净应用，零冲突**。
 
-**真正的问题不在补丁、而在缺文件**：`djui_modern_font_atlas.c` 里有一行
+**补丁不冲突，但模块本身有硬依赖**：`djui_modern_font_atlas.c` 里有一行
 
 ```c
 static const DjuiModernCnGlyph kCnGlyphs[] = {
@@ -133,18 +133,24 @@ static const DjuiModernCnGlyph kCnGlyphs[] = {
 
 它把 `src/pc/djui/cn_glyphs.h` 当**数组初始化列表**包进来，而这个文件是**汉化上游自带的**（6790 行 GB2312 表）。所以在 **PC 原版 / Android 原版** 上装 djui_modern，`#include` 找不到文件 → 编译直接失败；只有两个汉化上游能编过。
 
-因此 `cn_extra/` 收录一份 `src/pc/djui/cn_glyphs.h`：由 iQue 字表（`cn_map.json`，与 `cn_data/cn_glyphs_16x16.h` 同一张表）生成的 1061 行 `{ "字", 32, 30, 0 },`。注意：
+**本仓库不收录这份字表。** 曾经在 `cn_extra/` 里放过一份由 iQue 字表（`cn_map.json`，与 `cn_data/cn_glyphs_16x16.h` 同一张表）生成的 1061 行替代品，现在删掉了：
 
-- 它是**数组初始化片段**，写 `#ifndef` 守卫或任何声明都会编译失败；
-- djui_modern 只读 `unicode` 字段（用来预载常用字，避免 CJK 字体在 `CHARSET_MAX` 处截断），`base/width/spriteIndex` 只是占位，取值与汉化上游一致；
-- 表外的字符仍会由模块扫描字体 cmap 补齐；
-- 汉化上游已有自己的 6790 行版本，`cn_extra/` 只补缺不覆盖，所以那份原样保留。
+- djui_modern 作者（上善若）已说明后续会自己向原版上游兼容，届时这个文件要么进模块仓库、要么由构建脚本判断，总之不该由**补丁仓库**替它提供；我们收录只会和它将来自己的方案打架；
+- 那份表是 iQue 字表的子集，只在本项目的语境下成立，放到别人的原版上游上没有意义。
 
-改动 `cn_map.json` 后需要重新生成（生成逻辑同上，一次性脚本，不入库）：
+因此现在 `install.sh` 是**硬拒绝**而不是想办法补齐：
 
-```python
-# 只保留非 ASCII、UTF-8 ≤3 字节的字符，按码位排序，输出 `{ "字", 32, 30, 0 },`
+```bash
+$ sh install.sh -d -p zip
+[!] djui_modern 只能配汉化上游：它的字体图集里 #include "pc/djui/cn_glyphs.h"，
+[!] 这个文件由汉化上游（PC cn-repo / Android android-cn-repo）自带。
+[!] 本项目不再收录该字表（等 djui_modern 上游自己兼容原版上游）。
+[x] 请加 -c 使用汉化上游，或去掉 -d/--djmd。
 ```
+
+判据是 `-d` 必须配 `-c`（交互向导里也只在选了汉化上游后才会问 djui_modern）。等 djui_modern 上游合并了原版兼容，这条限制可以直接删掉；在那之前，原版上游想用这个模块只能自己准备 `src/pc/djui/cn_glyphs.h`。
+
+汉化上游自带的那份 6790 行表原样保留：`cn_extra/` 只补缺不覆盖，也不会去碰它。
 
 ## 应用
 

@@ -86,7 +86,7 @@ CASES = [
     ("汉化版 + 前端 + djmd", opts(), "-c -f -d"),
     ("原版 + 都不带", opts("原版", "false", "false"), ""),
     ("原版 + 只前端", opts("原版", "true", "false"), "-f"),
-    ("原版 + 只 djmd", opts("原版", "false", "true"), "-d"),
+    ("原版 + 只 djmd（install.sh 会拒绝）", opts("原版", "false", "true"), "-d"),
     ("汉化版 + 只 djmd", opts("汉化版", "false", "true"), "-c -d"),
     ("汉化版 + 只前端", opts("汉化版", "true", "false"), "-c -f"),
 ]
@@ -96,6 +96,16 @@ for name, inp, want in CASES:
         print(f"  ok   {name}: {got!r}")
     else:
         bad(f"{name}: {got!r}，期望 {want!r}")
+
+# `-d` 必须配 `-c` 是 install.sh 的硬约束（djui_modern 的字体图集 #include 汉化上游
+# 自带的 src/pc/djui/cn_glyphs.h，我们不收录替代品）。上面那个「原版 + 只 djmd」
+# 故意保留，用来说明 workflow 会如实拼出这组参数、再由 install.sh 秒退并提示；
+# 除此之外不允许再出现「带 -d 不带 -c」的组合。
+bad_combo = [n for n, _i, w in CASES if "-d" in w.split() and "-c" not in w.split()]
+if bad_combo == ["原版 + 只 djmd（install.sh 会拒绝）"]:
+    print("  ok   只保留了「原版 + djmd」这一组会被拒绝的组合")
+else:
+    bad(f"带 -d 不带 -c 的组合不对：{bad_combo}")
 
 # 这三个开关只能由 IQDX_BUILD_ARGS 提供，job 里再写死 -c/-f/-d 就会和用户的选择打架。
 # 只看 install.sh **之后**的参数：`su builder -c "sh install.sh ..."` 里的 -c 是 su 的。

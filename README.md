@@ -30,7 +30,7 @@ Super Mario 64 (Ch) (iQue) \[\!\]：`29047fba820695bd14c5bd7aa1aa4400`
  - 简易的 djui 前端开关
  - 接近一比一复刻《神游马力欧64》
  - 标题画面汉化支持，启用 [Vanilla SM64 Title Screen](https://mods.sm64coopdx.com/mods/vanilla-sm64-title-screen.1287/) 可以让 Coopdx 显示标题画面
- - 可与 [djui_modern](https://github.com/Shangshanruo666/djui_modern) 模块共存
+ - 可与 [djui_modern](https://github.com/Shangshanruo666/djui_modern) 模块共存（**需搭配汉化上游 `-c`**，原版上游缺它依赖的字表）
  - 热切换，切换神游资源无需重启
  - 桌面/安卓 多平台支持
  - 支持生成特定系统的软件包
@@ -48,7 +48,7 @@ sh ./install.sh
 sh ./install.sh -h                        # 列出全部选项
 sh ./install.sh -f -p deb                 # 带前端开关，生成 .deb
 sh ./install.sh -c -f -p rpm              # 汉化上游 + 前端 + .rpm
-sh ./install.sh -d -f -p mac              # 带 djui_modern，出 .app / .dmg
+sh ./install.sh -c -d -f -p mac           # 汉化上游 + djui_modern，出 .app / .dmg
 sh ./install.sh -a -c                     # 只构建 Android 汉化版 APK
 ```
 
@@ -59,7 +59,7 @@ sh ./install.sh -a -c                     # 只构建 Android 汉化版 APK
 | `-a, --android` | 只构建 Android APK（需要 NDK + Gradle），优先级高于 `--package` |
 | `-c, --chinese` | 使用 `上善若&梅塔的长名字` 制作的汉化版上游仓库 `sm64coopdx-Chinese` 或 `sm64coopdx-Chinese-Android` |
 | `-f, --frontend` | 应用 `patches/0002-djui-frontend.patch`，在 设置 → 其他 里添加简易开关；不应用时只能改配置文件 |
-| `-d, --djmd` | 应用 [djui_modern](https://github.com/Shangshanruo666/djui_modern) 模块 |
+| `-d, --djmd` | 应用 [djui_modern](https://github.com/Shangshanruo666/djui_modern) 模块。**必须同时给 `-c`**：该模块的字体图集 `#include "pc/djui/cn_glyphs.h"`，这个文件只有汉化上游自带；只给 `-d` 会直接报错退出（等 djui_modern 上游兼容原版后才会放开） |
 | `-p, --package <方式>` | 将 dist/ 内容打包成软件包或 portable 压缩包 |
 
 `--package` 可根据情况打包成以下不同的软件包：

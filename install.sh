@@ -75,6 +75,8 @@ usage() {
   -c, --chinese          使用汉化版上游（PC 用 cn-repo，Android 用 android-cn-repo）
   -f, --frontend         额外应用 0002 前端补丁：设置 → 其他 → 神游汉化
   -d, --djmd             应用 djui_modern 模块（在打 0001 之前）
+                         必须同时给 -c：该模块硬依赖汉化上游自带的
+                         src/pc/djui/cn_glyphs.h，原版上游里没有这个文件
 
 成品打包（-a 时忽略）
   -p, --package <方式>   auto | all | deb | rpm | arch | mac | setup | zip | other | no
@@ -100,7 +102,7 @@ usage() {
 示例
   sh install.sh -f -p deb          # Debian 系，带前端开关
   sh install.sh -c -f -p rpm       # 汉化上游 + 前端 + rpm
-  sh install.sh -d -f -p mac       # 带 djui_modern，打 .app/.dmg
+  sh install.sh -c -d -f -p mac     # 汉化上游 + djui_modern，打 .app/.dmg
   sh install.sh -a -c              # Android 汉化版 APK
   sh install.sh -po -p all --path build-iquedx/upstream
                                    # 不编译，直接用已有产物打包（CI 的第二段）
@@ -633,8 +635,12 @@ welcome_ask() {
     if [ "$(ask_yes_no '应用前端补丁？(设置 -> 其他 -> 神游汉化)' y)" = y ]; then
         ASK_FRONTEND=yes
     fi
-    if [ "$(ask_yes_no '应用 djui_modern 模块？' n)" = y ]; then
-        ASK_DJUI=yes
+    # 只在选了汉化上游时才问：djui_modern 硬依赖汉化上游自带的
+    # src/pc/djui/cn_glyphs.h，原版上游上装了也编不过（见下面的硬拒绝）。
+    if [ "$ASK_CHINESE" = yes ]; then
+        if [ "$(ask_yes_no '应用 djui_modern 模块？' n)" = y ]; then
+            ASK_DJUI=yes
+        fi
     fi
 
     if [ "$ASK_ANDROID" = no ]; then
@@ -720,6 +726,22 @@ esac
 if [ "$GIVEN_ARGS" = no ] && [ -t 0 ]; then
     INTERACTIVE=yes
     welcome_ask
+fi
+
+# djui_modern 的字体图集（src/pc/djui_modern/djui_modern_font_atlas.c）里有一行
+#     #include "pc/djui/cn_glyphs.h"
+# 把它当数组初始化列表用，而这个文件只有汉化上游自带（6790 行 GB2312 表）。
+# 我们不收录一份替代品：一是它与 iQue 字表重复，二是 djui_modern 上游已说明
+# 后续会自己兼容原版上游。所以这里当场拒绝，而不是等编译到一半才报一句
+# 「找不到 pc/djui/cn_glyphs.h」。
+#
+# 放在交互向导之后：向导里也可能勾了 djui_modern 却没选汉化上游，同一个判据。
+if [ "$ASK_DJUI" = yes ] && [ "$ASK_CHINESE" != yes ]; then
+    STAGE="检查 djui_modern 的前置条件"
+    warn "djui_modern 只能配汉化上游：它的字体图集里 #include \"pc/djui/cn_glyphs.h\"，"
+    warn "这个文件由汉化上游（PC cn-repo / Android android-cn-repo）自带。"
+    warn "本项目不再收录该字表（等 djui_modern 上游自己兼容原版上游）。"
+    die "请加 -c 使用汉化上游，或去掉 -d/--djmd。"
 fi
 
 if [ "$ASK_ANDROID" = yes ]; then

@@ -89,8 +89,8 @@ expect_var "Android 原版"      "-a"                           ASK_PACKAGE  no
 expect_var "Android 汉化"      "-a -c"                        TARGET       android-cn
 expect_var "Android 汉化 URL"  "-a -c"                        UP_URL       "$(uv android-cn-repo)"
 expect_var "前端补丁"          "-f -n"                        ASK_FRONTEND yes
-expect_var "djui_modern 长选项" "--djui-modern"               ASK_DJUI     yes
-expect_var "djui_modern 短选项" "-d"                          ASK_DJUI     yes
+expect_var "djui_modern 长选项" "-c --djui-modern"            ASK_DJUI     yes
+expect_var "djui_modern 短选项" "-c -d"                       ASK_DJUI     yes
 expect_var "打包方式"          "-p rpm"                       ASK_PACKAGE  rpm
 expect_var "便携 zip"          "-p zip"                       ASK_PACKAGE  zip
 expect_var "版本号覆盖"        "-V 9.9.9"                     VERSION      9.9.9
@@ -98,7 +98,7 @@ expect_var "绝对路径"          "--path /tmp/ph-up"            UPSTREAM_DIR /
 expect_var "成品目录"          "--dist /tmp/ph-dist"          DIST_DIR     /tmp/ph-dist
 expect_var "相对路径拼仓库根"  "--path rel/up"                UPSTREAM_DIR "$repo/rel/up"
 expect_var "-o 别名"           "-o /tmp/ph-o"                 UPSTREAM_DIR /tmp/ph-o
-expect_var "参数顺序无关"      "-p no -f -d"                  ASK_DJUI     yes
+expect_var "参数顺序无关"      "-p no -f -c -d"               ASK_DJUI     yes
 expect_var "Android 忽略打包"  "-p deb -a"                    ASK_PACKAGE  no
 expect_var "-p all"            "-p all"                       ASK_PACKAGE  all
 expect_var "-po 短选项"        "-po"                          PACKAGE_ONLY yes
@@ -115,6 +115,12 @@ expect_die "--path 后跟选项"    "--path 需要一个值"              "--pat
 expect_die "非法打包方式"       "只接受 auto|all|deb"            "-p war -n"
 expect_die "未知参数"           "未知参数"                       "--nope"
 expect_die "未知短选项"         "未知参数"                       "-Z"
+# djui_modern 的字体图集硬依赖汉化上游自带的 src/pc/djui/cn_glyphs.h，
+# 我们不收录替代品 ⇒ 只给 -d 不给 -c 必须在参数解析后立刻退出（不能等编译）。
+expect_die "-d 缺 -c"           "djui_modern"                  "-d"
+expect_die "-d 缺 -c（长选项）"  "djui_modern"                  "--djui-modern"
+expect_die "Android 原版 + -d"   "djui_modern"                  "-a -d"
+expect_die "-d 缺 -c（--print-config 也不放行）" "djui_modern"   "-d -n"
 
 say_section "C. 参数是否传到下游（桩环境）"
 S="$tmp/stub"
