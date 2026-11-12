@@ -1,0 +1,118 @@
+--- a/Makefile
++++ b/Makefile
+@@ -194,6 +194,18 @@
+ VERSION ?= us
+ $(eval $(call validate-option,VERSION,us))
+ 
++# CN_TEXT_PACK - embeds the Simplified-Chinese (iQue) in-game text pack.
++# This swaps the vanilla dialog / course / act strings for their two-byte CN
++# equivalents so the in-game dialog boxes and star-select screens render in
++# Chinese. Rendering support lives in src/game/cn_font.c.
++#   true  - Chinese text pack enabled (default)
++#   false - original English strings
++CN_TEXT_PACK ?= true
++
++ifeq ($(CN_TEXT_PACK),true)
++  DEFINES += SM64COOPDX_CN_TEXT=1
++endif
++
+ # Graphics microcode used
+ GRUCODE ?= f3dex2e
+ 
+@@ -442,6 +454,38 @@
+ # BUILD_DIR is the location where all build artifacts are placed
+ BUILD_DIR := $(BUILD_DIR_BASE)/$(VERSION)_pc
+ 
++#==============================================================================#
++# CN_TEXT_PACK flip guard                                                       #
++#==============================================================================#
++# SM64COOPDX_CN_TEXT is injected through C_DEFINES, so make has no way to know
++# that flipping CN_TEXT_PACK must invalidate every object. Without this guard a
++# flip silently links a mix of ON/OFF objects (the DJUI "Chinese text pack"
++# toggle and the dialog/course tables are #if'd out), which looks like the
++# localization "disappeared". Remember the last value and, when it changes,
++# touch the sources so the next build recompiles everything with the new
++# setting. That does not work here: this environment refuses utimes() on the
++# source tree and the touch ran with stderr discarded, so the guard reported
++# success while every stale object survived -- which is exactly how a mixed
++# binary (Chinese dialogs, English "PRESS START") got produced. Deleting the
++# objects cannot silently no-op, so we purge them and verify none survived.
++CN_TEXT_STAMP := $(BUILD_DIR_BASE)/.cn_text_pack_state
++$(shell \
++	mkdir -p $(BUILD_DIR_BASE) 2>/dev/null; \
++	_want='$(CN_TEXT_PACK)'; \
++	_have=$$(cat '$(CN_TEXT_STAMP)' 2>/dev/null); \
++	if [ "$$_have" != "$$_want" ]; then \
++		if [ -n "$$_have" ]; then \
++			printf 'CN_TEXT_PACK changed (%s -> %s): discarding every object.\n' "$$_have" "$$_want" >&2; \
++			find '$(BUILD_DIR)' -type f \( -name '*.o' -o -name '*.d' \) -exec rm -f {} + 2>/dev/null || true; \
++			_left=$$(find '$(BUILD_DIR)' -type f -name '*.o' 2>/dev/null | wc -l); \
++			if [ "$$_left" != "0" ]; then \
++				printf 'ERROR: %s object(s) survived the purge, this build would mix flags. Run `make -B` (forced rebuild) or delete build/%s_pc by hand.\n' "$$_left" "$(VERSION)" >&2; \
++				exit 1; \
++			fi; \
++		fi; \
++		printf '%s' "$$_want" > '$(CN_TEXT_STAMP)'; \
++	fi)
++
+ ifeq ($(WINDOWS_BUILD),1)
+ 	EXE := $(BUILD_DIR)/sm64coopdx.exe
+ else # Linux builds/binary namer
+@@ -1360,10 +1404,14 @@
+ 	$(V)$(PYTHON) $(TOOLS_DIR)/demo_data_converter.py assets/demo_data.json $(DEF_INC_CFLAGS) > $@
+ 
+ # Encode in-game text strings
+-$(BUILD_DIR)/text/%/define_courses.inc.c: text/define_courses.inc.c text/%/courses.h
++# NOTE: the CN sources are listed as prerequisites so that editing the
++# generated iQue text (rather than the template) still regenerates the
++# preprocessed output. Without this the build silently keeps a stale copy.
++CN_TEXT_DEPS := $(wildcard text/cn_dialogs_cn.inc.c text/cn_labels.inc.c)
++$(BUILD_DIR)/text/%/define_courses.inc.c: text/define_courses.inc.c text/%/courses.h $(CN_TEXT_DEPS)
+ 	@$(PRINT) "$(GREEN)Preprocessing: $(BLUE)$@ $(NO_COL)\n"
+ 	$(V)$(CPP) $(PROF_FLAGS) $(CPPFLAGS) $< -o - -I text/$*/ | $(TEXTCONV) charmap.txt - $@
+-$(BUILD_DIR)/text/%/define_text.inc.c: text/define_text.inc.c text/%/courses.h text/%/dialogs.h
++$(BUILD_DIR)/text/%/define_text.inc.c: text/define_text.inc.c text/%/courses.h text/%/dialogs.h $(CN_TEXT_DEPS)
+ 	@$(PRINT) "$(GREEN)Preprocessing: $(BLUE)$@ $(NO_COL)\n"
+ 	$(V)$(CPP) $(PROF_FLAGS) $(CPPFLAGS) $< -o - -I text/$*/ | $(TEXTCONV) charmap.txt - $@
+ 
+--- a/src/pc/configfile.c
++++ b/src/pc/configfile.c
+@@ -219,6 +219,9 @@
+ bool         configMenuDemos                      = false;
+ bool         configDisablePopups                  = false;
+ char         configLanguage[MAX_CONFIG_STRING]    = "";
++bool         configChineseText                    = true;
++bool         configChineseTextPrompted            = false;
++bool         configChineseTextUserSet             = false;
+ bool         configForce4By3                      = false;
+ bool         configDynosLocalPlayerModelOnly      = false;
+ unsigned int configPvpType                        = PLAYER_PVP_CLASSIC;
+@@ -383,6 +386,9 @@
+     // {.name = "coop_menu_demos",                .type = CONFIG_TYPE_BOOL,   .boolValue   = &configMenuDemos},
+     {.name = "disable_popups",                 .type = CONFIG_TYPE_BOOL,   .boolValue   = &configDisablePopups},
+     {.name = "language",                       .type = CONFIG_TYPE_STRING, .stringValue = (char*)&configLanguage, .maxStringLength = MAX_CONFIG_STRING},
++    {.name = "chinese_text",                   .type = CONFIG_TYPE_BOOL,   .boolValue   = &configChineseText},
++    {.name = "chinese_text_prompted",          .type = CONFIG_TYPE_BOOL,   .boolValue   = &configChineseTextPrompted},
++    {.name = "chinese_text_user_set",          .type = CONFIG_TYPE_BOOL,   .boolValue   = &configChineseTextUserSet},
+     {.name = "force_4by3",                     .type = CONFIG_TYPE_BOOL,   .boolValue   = &configForce4By3},
+     {.name = "dynos_local_player_model_only",  .type = CONFIG_TYPE_BOOL,   .boolValue   = &configDynosLocalPlayerModelOnly},
+     // CoopNet settings
+--- a/src/pc/configfile.h
++++ b/src/pc/configfile.h
+@@ -165,6 +165,16 @@
+ extern bool         configMenuDemos;
+ extern bool         configDisablePopups;
+ extern char         configLanguage[MAX_CONFIG_STRING];
++// Chinese (iQue) text pack: when true the in-game dialog and course/act name
++// tables use the Simplified-Chinese data compiled from the official iQue
++// sources. When false the vanilla US text is used instead.
++extern bool         configChineseText;
++// Legacy: true once the old first-run confirmation box had been answered. Now
++// it only records that the automatic (rom-detection) decision has been taken.
++extern bool         configChineseTextPrompted;
++// The player changed the Chinese text switch by hand in the DJUI. From then on
++// rom detection must not overrule it, in either direction.
++extern bool         configChineseTextUserSet;
+ extern bool         configForce4By3;
+ extern bool         configDynosLocalPlayerModelOnly;
+ extern unsigned int configPvpType;

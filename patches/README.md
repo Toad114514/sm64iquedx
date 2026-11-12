@@ -1,13 +1,22 @@
 # 补丁索引
 
-**所有补丁平铺在 `patches/` 根目录，不建子目录。** 四套上游共用 `0001` / `0002` / `cn_extra/`；两个 Android 目标共用**同一份**平台增量。语言字符串与中文配置项**不是补丁**，由 `scripts/add_lang_strings.sh` / `scripts/add_cn_config.sh` 在应用阶段插入。
+补丁**全部平铺在 `patches/` 下**，文件名 = 四位编号 + 分组 + 职责，**编号就是应用顺序**（`sort` 即顺序，脚本不另存一份列表）。分组只活在文件名里：可选组用前缀 glob 区分（`--frontend` → `0007-*.patch`，android → `0008-*.patch`），不再为可选补丁多套一层目录。
 
-| 补丁 | 文件数 | 适用目标 | 作用 |
+| 补丁文件 | 文件数 | 适用目标 | 作用 |
 | --- | --- | --- | --- |
-| `0001-src-overlay.patch` | 25 | `pc` / `android` / `android-cn` 共用 | 必选，核心代码改动。**不含任何 `lang/*.ini`，也不含 DJUI 前端** |
-| `0002-djui-frontend.patch` | 1 | 三目标共用 | 可选，设置 → 其他 的「中文字库」开关 |
-| `0005-android.patch` | 3 | `android` / `android-cn` **共用** | 必选，Android 平台增量 |
-| `cn_extra/` | 14 | 三目标共用 | 上游不存在的新增文件，仅补缺、不覆盖 |
+| `0001-build-and-config.patch` | 3 | 四套上游共用 | `Makefile` 的 `CN_TEXT_PACK` 开关 + `configChineseText*` 三个配置项 |
+| `0002-rom-assets.patch` | 3 | 共用 | 神游 ROM 探测（`rom_checker.h`）、启动装配（`pc_main.c`）、分段资源读取（`rom_assets.c`） |
+| `0003-text-core.patch` | 6 | 共用 | 两字节编码/字形核心、HUD 与标题文本（`print.c` / `area.c`）、课程与动作名查表、`text/define_*.inc.c` |
+| `0004-dialog.patch` | 5 | 共用 | 双表架构（`dialog_table.[ch]`）、对话框渲染与分页/盒高（`ingame_menu.[ch]`）、Lua 侧替换 |
+| `0005-menus.patch` | 5 | 共用 | 文件选择、选星盘、标题过场（含 iQue 标题网格） |
+| `0006-asset-overlay.patch` | 2 | 共用 | iQue 贴图/几何覆盖的消费侧：能量表轮盘偏移（HUD 底层 + Lua 绑定） |
+| `0007-djui-frontend.patch` | 3 | 三目标共用，**可选** | 设置 → 其他 的「中文字库」开关；`djui_panel_confirm.[ch]` 的 `create_ex()`（目前无调用点） |
+| `0008-android.patch` | 3 | `android` / `android-cn` **共用** | Android 平台增量（`Android.mk` / `Makefile` / `pc_main.c`） |
+| `cn_extra/` | 15 | 三目标共用 | 上游不存在的新增文件，仅补缺、不覆盖 |
+
+`0001`~`0006` 必选、四套上游共用；`0007` 只在 `--frontend` 时应用；`0008` 由两个 Android 目标共用**同一份**。新增一个分组 = 加一个编号更大的文件，不需要改应用器的分组表。语言字符串与中文配置项**不是补丁**，由 `scripts/add_lang_strings.sh` / `scripts/add_cn_config.sh` 在应用阶段插入。
+
+拆分后总数仍是 27 个文件（`0001`~`0007` 合计），`scripts/gen_all_patches.sh` 每次生成都会拿「不加分组过滤的全量差异」当参照，断言分组**无遗漏、无重复**；同时拦住两种会「同一处改动被打两遍」的残留：拆分前的单文件补丁（`0001-src-overlay.patch` 等），以及按目录分组的旧目录（`01-build/` … `08-platform/`）。
 
 四套上游与目标名的对应见仓库根 `upstream.txt`；`pc` 同时覆盖原版 CoopDX 与上善若的 PC 汉化版。
 
@@ -38,13 +47,13 @@ scripts/add_lang_strings.sh <上游根目录> [--check]
 
 `--check` 只报告待插入条目、不写盘，用于校验；重复执行始终安全（已插入的键全部跳过）。对 PC 基线跑一次的结果与实验工作区 `lang/English.ini` **逐字节一致**，所以 `src/` 里不再放这个文件——字符串只有一个来源，就是脚本。
 
-`0001` 因此把整个 `lang/` 前缀排除掉（由生成器保证，不靠应用器的 `--exclude`）：这样主补丁在四套上游上都不碰 ini，语言相关的东西只有这一处。
+每个分组在生成时都把整个 `lang/` 前缀排除掉（由生成器保证，不靠应用器的 `--exclude`）：这样所有补丁在四套上游上都不碰 ini，语言相关的东西只有这一处。
 
-> 这两条字符串即使不打可选的 `0002` 也无害（只是多/少一个被 DLANG 引用的条目）。
+> 这两条字符串即使不打可选的 `0007-djui-frontend.patch` 也无害（只是多/少一个被 DLANG 引用的条目）。
 
 ## 平台增量补丁
 
-`0005` **只有一份**，两个 Android 目标共用，含 3 个文件：`Android.mk`、`Makefile`、`src/pc/pc_main.c`。**不含任何 ini，也不含 `configfile.c`**。
+`0008-android.patch` **只有一份**，两个 Android 目标共用，含 3 个文件：`Android.mk`、`Makefile`、`src/pc/pc_main.c`。**不含任何 ini，也不含 `configfile.c`**。
 
 | 文件 | 原因 |
 | --- | --- |
@@ -52,7 +61,7 @@ scripts/add_lang_strings.sh <上游根目录> [--check]
 | `Makefile` | 三方合并后的 PC 改动。对 ndk-build 无作用，保留以便与 PC 一致；`CN_TEXT_DEPS` 对生成 `text/define_*.inc.c` 仍有实际作用 |
 | `src/pc/pc_main.c` | Android 在中文初始化的同一位置切 `SDL_main` / `TARGET_ANDROID` 签名分支 |
 
-`Makefile` 与 `pc_main.c` 这两个「上下文漂移」文件在应用 `0001` 时被 `--exclude` 跳过，由平台补丁直接给出终态。终态由三方合并得到：
+`Makefile`（在 `0001-build-and-config.patch`）与 `pc_main.c`（在 `0002-rom-assets.patch`）这两个「上下文漂移」文件在应用 `0001`~`0006` 时被 `--exclude` 跳过，由平台补丁直接给出终态。终态由三方合并得到：
 
 ```
 base   = PC 8cd6e59
@@ -91,11 +100,11 @@ theirs = 本仓库 src/（PC 终态）
 
 锚点：声明插在 `configLanguage[MAX_CONFIG_STRING]` 行**之后**，配置表条目插在 `{.name = "force_4by3"` 行**之前**。这两个子串在三份 `configfile.c` 里各只出现一次（脚本里用 `grep -F` 固定子串而不是正则——`\{` 在 BRE 里是区间开头，GNU grep 会直接报「不匹配的 \{」）。
 
-`configfile.c` 仍留在 `--exclude` 列表里（`0001` 在它上面的 hunk 上下文确实对不上），只是不再由补丁提供终态。
+`configfile.c` 仍留在 `--exclude` 列表里（`0001-build-and-config.patch` 在它上面的 hunk 上下文确实对不上），只是不再由补丁提供终态。
 
 ### 上游自带差异、但不进平台补丁
 
-`src/pc/configfile.h` 和 `src/pc/lua/utils/smlua_misc_utils.c` 在两个 Android 上游与 PC 基线内容不同，但 `0001` 的 hunk 上下文没被破坏，能直接应用。应用后它们等于「Android 上游 + PC 改动」，与 PC 终态不完全相同是**预期**的；已验证 `0001` 新增的 10 行在这两个文件里一行不缺（含 `cn_tex_gauge_dy()`）。
+`src/pc/configfile.h`（`0001-build-and-config.patch`）和 `src/pc/lua/utils/smlua_misc_utils.c`（`0006-asset-overlay.patch`）在两个 Android 上游与 PC 基线内容不同，但这两个 hunk 的上下文没被破坏，能直接应用。应用后它们等于「Android 上游 + PC 改动」，与 PC 终态不完全相同是**预期**的；已验证新增的 10 行在这两个文件里一行不缺（含 `cn_tex_gauge_dy()`）。
 
 汉化版 Android 自带的 `palettes/*.ini`、`src/pc/djui/*_glyphs.h`、`textures/custom_font/*.png` 属于上游本身，补丁不改动、也不收录。
 
@@ -121,7 +130,7 @@ theirs = 本仓库 src/（PC 终态）
 | `Makefile` | `~L194` 加 `CN_TEXT_PACK`、`~L454` 加 flip guard | `~L470` 的 `SRC_DIRS` 行插 `src/pc/djui_modern` | 可应用（上下文不重叠） |
 | `Android.mk` | `~L106` 的 `LOCAL_CFLAGS` 后加 `SM64COOPDX_CN_TEXT` | `~L70` 的 `SRC_DIRS` 行插 `src/pc/djui_modern` | 可应用 |
 
-实测（基线取自 `upstream.txt`，桌面双向、Android 两个上游各一遍）：`0001`/`0002`/`0005` 与 djui_modern 的 9 个桌面补丁、2 个 Android 构建补丁，**正向反向都干净应用，零冲突**。
+实测（基线取自 `upstream.txt`，桌面双向、Android 两个上游各一遍）：`0001`~`0008` 全部补丁与 djui_modern 的 9 个桌面补丁、2 个 Android 构建补丁，**正向反向都干净应用，零冲突**。
 
 **补丁不冲突，但模块本身有硬依赖**：`djui_modern_font_atlas.c` 里有一行
 
@@ -164,27 +173,27 @@ scripts/apply_patches.sh <pc|android|android-cn> <上游干净 checkout> [--fron
 
 | 目标 | 顺序 |
 | --- | --- |
-| `pc` | `0001` → [`0002`] → `cn_extra/`（补缺）→ `add_lang_strings.sh` |
-| `android` | `0001`（跳过 3 个漂移文件）→ `0005` → [`0002`] → `cn_extra/`（补缺）→ `add_cn_config.sh` → `add_lang_strings.sh` |
-| `android-cn` | 同 `android`（**同一份** `0005`，只差上游自带文件） |
+| `pc` | `0001`~`0006`（编号序）→ [`0007`] → `cn_extra/`（补缺）→ `add_lang_strings.sh` |
+| `android` | `0001`~`0006`（跳过 3 个漂移文件）→ `0008` → [`0007`] → `cn_extra/`（补缺）→ `add_cn_config.sh` → `add_lang_strings.sh` |
+| `android-cn` | 同 `android`（**同一份** `0008-android.patch`，只差上游自带文件） |
 
-`[]` 表示仅 `--frontend` 时应用。语言脚本**必须放在 `cn_extra/` 之后**：PC 的 `lang/Chinese.ini` 就是 `cn_extra/` 带过来的。**不要**用 `cp -R src/.` 覆盖终态——那会无条件带上前端，也会把 Android 的平台差异冲掉。
+`[]` 表示仅 `--frontend` 时应用。目录名带序号 ⇒ 同一目录内的补丁按文件名排序，跨目录按目录名排序，顺序唯一。语言脚本**必须放在 `cn_extra/` 之后**：PC 的 `lang/Chinese.ini` 就是 `cn_extra/` 带过来的。**不要**用 `cp -R src/.` 覆盖终态——那会无条件带上前端，也会把 Android 的平台差异冲掉。
 
 排除列表同时存在于 `scripts/gen_platform_patches.py` 的 `EXCLUDED` 和 `scripts/apply_patches.sh`，生成脚本会断言两者完全一致，**改一处必须改另一处**。
 
 ## 重新生成
 
 ```bash
-# 1. 改动 src/ 后，重生成共用的 0001 / 0002
+# 1. 改动 src/ 后，重生成共用的 0001~0007 全部分组
 sh scripts/gen_all_patches.sh <PC 8cd6e59 基线目录>
 
-# 2. 重生成 0005（Android 上游 checkout 见 upstream.txt）
+# 2. 重生成 0008-android.patch（Android 上游 checkout 见 upstream.txt）
 python3 scripts/gen_platform_patches.py \
     --pc-base    <PC 8cd6e59 基线目录> \
     --android    <ManIsCat2 上游目录> \
     --android-cn <汉化版 Android 上游目录>
 ```
 
-第 1 步会断言 `0001` 里既没有前端文件也没有 `lang/`，`0002` 只含那一个前端文件。第 2 步自检：`0001`（跳过 3 个漂移文件）+ 平台补丁 + `0002` + 两个插入脚本叠加后与三方合并终态逐字节一致（`android` / `android-cn` 各 27 文件），语言字符串齐全，两个脚本复跑无改动（幂等），不应用 `0002` 时前端文件保持上游原版，平台补丁与 `0001` 不重叠。**生成器会逐文件比对两个上游算出来的平台增量，一旦不同就直接报错**——那说明两个上游真的分道扬镳，得退回「每目标一份补丁」，而不是让共享补丁静默只对其中一个有效。
+第 1 步会断言 `0001`~`0007` 恰好覆盖 `src/` 的全部差异（无遗漏、无重复）、都不含 `lang/`、且 `patches/` 下没有旧的分组目录与旧单文件补丁残留。第 2 步自检：`0001`~`0006`（跳过 3 个漂移文件）+ 平台补丁 + `0007` + 两个插入脚本叠加后与三方合并终态逐字节一致（`android` / `android-cn` 各 27 文件），语言字符串齐全，两个脚本复跑无改动（幂等），不应用 `0007` 时 3 个前端文件保持上游原版，平台补丁与 `0001`~`0006` 不重叠。**生成器会逐文件比对两个上游算出来的平台增量，一旦不同就直接报错**——那说明两个上游真的分道扬镳，得退回「每目标一份补丁」，而不是让共享补丁静默只对其中一个有效。
 
 语言字符串改了文案、或中文配置项改了名字时不用重生成任何补丁，只改 `scripts/add_lang_strings.sh` / `scripts/add_cn_config.sh` 里对应的常量。

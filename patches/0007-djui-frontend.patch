@@ -1,0 +1,149 @@
+--- a/src/pc/djui/djui_panel_confirm.c
++++ b/src/pc/djui/djui_panel_confirm.c
+@@ -3,7 +3,9 @@
+ #include "djui_panel_menu.h"
+ #include "pc/utils/misc.h"
+ 
+-void djui_panel_confirm_create(struct DjuiBase* caller, char* title, char* message, void (*on_yes_click)(struct DjuiBase*)) {
++void djui_panel_confirm_create_ex(struct DjuiBase* caller, char* title, char* message,
++                                  void (*on_yes_click)(struct DjuiBase*),
++                                  void (*on_no_click)(struct DjuiBase*)) {
+     struct DjuiThreePanel* panel = djui_panel_menu_create(title, false);
+     struct DjuiBase* body = djui_three_panel_get_body(panel);
+     {
+@@ -21,10 +23,15 @@
+ 
+         struct DjuiRect* rect1 = djui_rect_container_create(body, 64);
+         {
+-            djui_button_left_create(&rect1->base, DLANG(MENU, NO), DJUI_BUTTON_STYLE_NORMAL, djui_panel_menu_back);
++            djui_button_left_create(&rect1->base, DLANG(MENU, NO), DJUI_BUTTON_STYLE_NORMAL,
++                                    on_no_click ? on_no_click : djui_panel_menu_back);
+             djui_button_right_create(&rect1->base, DLANG(MENU, YES), DJUI_BUTTON_STYLE_NORMAL, on_yes_click);
+         }
+     }
+ 
+     djui_panel_add(caller, panel, NULL);
+ }
++
++void djui_panel_confirm_create(struct DjuiBase* caller, char* title, char* message, void (*on_yes_click)(struct DjuiBase*)) {
++    djui_panel_confirm_create_ex(caller, title, message, on_yes_click, NULL);
++}
+--- a/src/pc/djui/djui_panel_confirm.h
++++ b/src/pc/djui/djui_panel_confirm.h
+@@ -2,4 +2,9 @@
+ #include "djui.h"
+ 
+ void djui_panel_confirm_create(struct DjuiBase* caller, char* title, char* message, void (*on_yes_click)(struct DjuiBase*));
++// Same as djui_panel_confirm_create(), but the "no" button also runs a callback
++// instead of just closing the panel.
++void djui_panel_confirm_create_ex(struct DjuiBase* caller, char* title, char* message,
++                                  void (*on_yes_click)(struct DjuiBase*),
++                                  void (*on_no_click)(struct DjuiBase*));
+ 
+--- a/src/pc/djui/djui_panel_misc.c
++++ b/src/pc/djui/djui_panel_misc.c
+@@ -8,6 +8,11 @@
+ #include "pc/utils/misc.h"
+ #include "pc/configfile.h"
+ #include "game/hardcoded.h"
++#if defined(SM64COOPDX_CN_TEXT)
++#include "game/segment2.h"
++#include "pc/rom_checker.h"
++#include "game/cn_rom_assets.h"
++#endif
+ #if defined(_WIN32)
+ #include <windows.h>
+ #endif
+@@ -42,12 +47,92 @@
+ }
+ #endif
+ 
++#if defined(SM64COOPDX_CN_TEXT)
++// Runtime switch for the built-in iQue/Chinese text pack. Applies immediately:
++// chinese_text_pack_set_active() repoints the live dialog / course / act tables
++// and persists the choice.
++static void djui_panel_misc_chinese_text_changed(UNUSED struct DjuiBase* checkbox) {
++    chinese_text_pack_set_active(configChineseText);
++}
++
++// The pack's glyphs, dialog text and textures are read out of the player's own
++// 神游 dump at startup, so a machine without that dump has nothing to show --
++// but "nothing to show" is not the same as "explained": without this gate the
++// player just assumes the feature is broken. So the checkbox is greyed out
++// (DJUI paints a disabled interactable in grey and refuses the click) plus a
++// short reason underneath.
++//
++// chinese_text_pack_init() applies the same rule at startup and rom_assets.c
++// applies it to the texture overlay; this function only makes the UI honest
++// about it.
++//
++// The checkbox is bound to a mirror instead of configChineseText, because the
++// stored value is deliberately left alone when the dump is missing (see
++// chinese_text_pack_init): it can legitimately say "true" while nothing is on.
++// Showing that would be a ticked-but-grey box, i.e. "it is on and you cannot
++// turn it off". The mirror reads false, which is what is actually drawn, and
++// nothing can write to it -- disabled controls do not dispatch value changes,
++// but the pointer swap means even a future fix to that cannot leak into the
++// config.
++
++// The reason line is a normal DjuiText, so it has to be sized the way every
++// other wrapping text in the menus is (see djui_panel_confirm_create_ex):
++// give it the full width, compute the tree, count the lines the string actually
++// wraps to, then hand it exactly that many lines. Two things this avoids:
++//   * fontScale is NOT a ratio -- the default is font->defaultFontScale (32),
++//     so 0.7f is a 45x-too-small font. It renders as a sub-pixel smear, which
++//     reads as "a mysterious blank row under the greyed checkbox";
++//   * a fixed height (24) does not follow the wrapped line count, so a longer
++//     translation would clip and a shorter one would leave a gap.
++static void djui_panel_misc_chinese_text_hint(struct DjuiBase* body) {
++    struct DjuiText* hint = djui_text_create(body, DLANG(MISC, CHINESE_TEXT_PACK_NO_ROM));
++    if (hint == NULL) { return; }
++
++    // 65% of the menu font, expressed in the font's own units.
++    f32 fontScale = hint->font->defaultFontScale * 0.65f;
++    djui_text_set_font_scale(hint, fontScale);
++    djui_text_set_alignment(hint, DJUI_HALIGN_LEFT, DJUI_VALIGN_TOP);
++    djui_base_set_color(&hint->base, 150, 150, 150, 255);
++    djui_base_set_size_type(&hint->base, DJUI_SVT_RELATIVE, DJUI_SVT_ABSOLUTE);
++    djui_base_set_size(&hint->base, 1.0f, 64);
++    djui_base_compute_tree(&hint->base);
++    u16 lines = djui_text_count_lines(hint, 8);
++
++    // djui_text_render() derives its maxLines from
++    //   floor(comp.height / (font->lineHeight * fontScale))
++    // and lineHeight is 1.0 for every menu font, so one line *is* fontScale
++    // units of height. Anything less would clip the last line: the older menu
++    // texts use 32 * 0.8125 * lines + 8, which is a legacy 26px pitch and only
++    // survives one line. Cover the wrapped lines exactly, plus 4px of air.
++    djui_base_set_size(&hint->base, 1.0f, fontScale * lines + 4);
++}
++
++static bool sChineseTextUnavailable = false;
++static void djui_panel_misc_chinese_text_create(struct DjuiBase* body) {
++    struct DjuiCheckbox* checkbox = djui_checkbox_create(body, DLANG(MISC, CHINESE_TEXT_PACK),
++                                                         &configChineseText,
++                                                         djui_panel_misc_chinese_text_changed);
++    if (checkbox == NULL || cn_rom_assets_ready()) {
++        return;
++    }
++
++    sChineseTextUnavailable = false;
++    checkbox->value = &sChineseTextUnavailable;
++    djui_base_set_enabled(&checkbox->base, false);
++
++    djui_panel_misc_chinese_text_hint(body);
++}
++#endif
++
+ void djui_panel_misc_create(struct DjuiBase* caller) {
+     struct DjuiThreePanel* panel = djui_panel_menu_create(DLANG(MISC, MISC_TITLE), false);
+     struct DjuiBase* body = djui_three_panel_get_body(panel);
+     {
+         djui_checkbox_create(body, DLANG(DISPLAY, SHOW_PING), &configShowPing, NULL);
+         djui_checkbox_create(body, DLANG(MISC, DISABLE_POPUPS), &configDisablePopups, NULL);
++#if defined(SM64COOPDX_CN_TEXT)
++        djui_panel_misc_chinese_text_create(body);
++#endif
+ #ifndef DEVELOPMENT
+         djui_checkbox_create(body, DLANG(MISC, LUA_PROFILER), &configLuaProfiler, NULL);
+ #endif

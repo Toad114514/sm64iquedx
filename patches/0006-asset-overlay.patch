@@ -1,0 +1,112 @@
+--- a/src/pc/djui/djui_hud_utils.c
++++ b/src/pc/djui/djui_hud_utils.c
+@@ -17,6 +17,7 @@
+ #include "djui_hud_utils.h"
+ #include "djui_panel_pause.h"
+ #include "game/camera.h"
++#include "game/cn_tex.h"
+ #include "game/hud.h"
+ #include "game/rendering_graph_node.h"
+ #include "game/first_person_cam.h"
+@@ -767,7 +768,16 @@
+     // translate position
+     djui_hud_create_interp_gfx(interp, INTERP_HUD_TRANSLATION);
+     f32 translatedX = x;
+-    f32 translatedY = y;
++    // One texture in the game is drawn out of place by its own artwork: iQue
++    // redrew the power meter with the gauge socket four texels lower inside the
++    // same 32x64 cell, and moved the matching vertices with it. The vanilla
++    // display list replays those vertices, but anything drawn through here --
++    // the Lua `hud_render_power_meter` binding, and any mod that rebuilds the
++    // widget out of `texture_power_meter_*` -- works from US offsets and would
++    // leave the socket's dark rim showing under the wheel. Correcting it on the
++    // texture rather than at each call site covers callers that do not exist
++    // yet; for every other texture this is a no-op.
++    f32 translatedY = y + cn_tex_gauge_texture_dy(texture, scaleH);
+     djui_hud_position_translate(&translatedX, &translatedY);
+     create_dl_translation_matrix(DJUI_MTX_PUSH, translatedX, translatedY, gDjuiHudUtilsZ);
+ 
+@@ -799,6 +809,11 @@
+ static void djui_hud_render_texture_tile_raw(const Texture* texture, u32 width, u32 height, u8 fmt, u8 siz, f32 x, f32 y, f32 scaleW, f32 scaleH, u32 tileX, u32 tileY, u32 tileW, u32 tileH, struct InterpHud *interp) {
+     if (!texture) { return; }
+ 
++    // Taken before the tile correction just below: the gauge offset is four
++    // texels of the *whole* texture's grid, so it must not be scaled by how
++    // much of it this quad happens to show.
++    f32 texelScaleH = scaleH;
++
+     gDjuiHudUtilsZ += 0.001f;
+     if (width != 0) { scaleW *= (f32) tileW / (f32) width; }
+     if (height != 0) { scaleH *= (f32) tileH / (f32) height; }
+@@ -806,7 +821,7 @@
+     // translate position
+     djui_hud_create_interp_gfx(interp, INTERP_HUD_TRANSLATION);
+     f32 translatedX = x;
+-    f32 translatedY = y;
++    f32 translatedY = y + cn_tex_gauge_texture_dy(texture, texelScaleH);
+     djui_hud_position_translate(&translatedX, &translatedY);
+     create_dl_translation_matrix(DJUI_MTX_PUSH, translatedX, translatedY, gDjuiHudUtilsZ);
+ 
+@@ -852,9 +867,15 @@
+     struct InterpHud *interp = djui_hud_create_interp();
+     if (interp) {
+         interp->posX.prev = prevX;
+-        interp->posY.prev = prevY;
++        // The gauge shift has to enter the *interpolated endpoints*, not just
++        // the frame being built. patch_djui_hud() replays the position from
++        // these fields on every in-between frame, overwriting the matrix this
++        // call writes to the display list; pushing it into raw() alone would be
++        // correct for one frame and then snap back four texels while the widget
++        // flies to its new home.
++        interp->posY.prev = prevY + cn_tex_gauge_texture_dy(texInfo->texture, prevScaleH);
+         interp->posX.curr = x;
+-        interp->posY.curr = y;
++        interp->posY.curr = y + cn_tex_gauge_texture_dy(texInfo->texture, scaleH);
+         interp->scaleX.prev = prevScaleW;
+         interp->scaleY.prev = prevScaleH;
+         interp->scaleX.curr = scaleW;
+@@ -869,6 +890,11 @@
+ void djui_hud_render_texture_tile_interpolated(struct TextureInfo* texInfo, f32 prevX, f32 prevY, f32 prevScaleW, f32 prevScaleH, f32 x, f32 y, f32 scaleW, f32 scaleH, u32 tileX, u32 tileY, u32 tileW, u32 tileH) {
+     if (!texInfo) { return; }
+ 
++    // The gauge shift is a property of the whole texture's texel grid, so it is
++    // measured against the un-tiled scale (same reason as in tile_raw).
++    f32 texelPrevH = prevScaleH;
++    f32 texelCurrH = scaleH;
++
+     // apply scale correction for tiles
+     if (texInfo->width != 0) {
+         scaleW *= ((f32)tileW / (f32)texInfo->width);
+@@ -882,9 +908,9 @@
+     struct InterpHud *interp = djui_hud_create_interp();
+     if (interp) {
+         interp->posX.prev = prevX;
+-        interp->posY.prev = prevY;
++        interp->posY.prev = prevY + cn_tex_gauge_texture_dy(texInfo->texture, texelPrevH);
+         interp->posX.curr = x;
+-        interp->posY.curr = y;
++        interp->posY.curr = y + cn_tex_gauge_texture_dy(texInfo->texture, texelCurrH);
+         interp->scaleX.prev = prevScaleW;
+         interp->scaleY.prev = prevScaleH;
+         interp->scaleX.curr = scaleW;
+--- a/src/pc/lua/utils/smlua_misc_utils.c
++++ b/src/pc/lua/utils/smlua_misc_utils.c
+@@ -259,11 +259,17 @@
+ };
+ 
+ void hud_render_power_meter(s32 health, f32 x, f32 y, f32 width, f32 height) {
++    // The iQue layout offset is *not* applied here: djui_hud_render_texture()
++    // recognises the wedge textures and shifts them itself (see
++    // cn_tex_gauge_texture_dy). That also fixes mods that skip this binding and
++    // rebuild the widget out of the same textures, which is the common case --
++    // HUD mods generally draw their own.
++    f32 gaugeY = y + height / 4;
+     djui_hud_render_texture(&sPowerMeterTexturesInfo[0], x, y, width / 64, height / 64);
+     djui_hud_render_texture(&sPowerMeterTexturesInfo[1], x + (width - 2) / 2, y, width / 64, height / 64);
+     s32 numWedges = MIN(MAX(health >> 8, 0), 8);
+     if (numWedges != 0) {
+-        djui_hud_render_texture(&sPowerMeterTexturesInfo[numWedges + 1], x + (width - 4) / 4, y + height / 4, width / 64,  height / 64);
++        djui_hud_render_texture(&sPowerMeterTexturesInfo[numWedges + 1], x + (width - 4) / 4, gaugeY, width / 64,  height / 64);
+     }
+ }
+ 

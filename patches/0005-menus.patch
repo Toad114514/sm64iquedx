@@ -1,0 +1,282 @@
+--- a/src/menu/file_select.c
++++ b/src/menu/file_select.c
+@@ -2324,11 +2324,11 @@
+ #endif
+ 
+ #ifndef VERSION_EU
+-    INGAME_TEXT_COPY(textEraseFile, TEXT_ERASE_FILE);
+-    INGAME_TEXT_COPY(textSure, TEXT_SURE);
+-    INGAME_TEXT_COPY(textNoSavedDataExists, TEXT_NO_SAVED_DATA_EXISTS);
+-    INGAME_TEXT_COPY(textMarioAJustErased, TEXT_FILE_MARIO_A_JUST_ERASED);
+-    INGAME_TEXT_COPY(textSavedDataExists, TEXT_SAVED_DATA_EXISTS);
++    INGAME_TEXT_COPY(textEraseFile, TEXT_ERASE_FILE, CN_LABEL_NONE);
++    INGAME_TEXT_COPY(textSure, TEXT_SURE, CN_LABEL_NONE);
++    INGAME_TEXT_COPY(textNoSavedDataExists, TEXT_NO_SAVED_DATA_EXISTS, CN_LABEL_NONE);
++    INGAME_TEXT_COPY_MUTABLE(textMarioAJustErased, TEXT_FILE_MARIO_A_JUST_ERASED);
++    INGAME_TEXT_COPY(textSavedDataExists, TEXT_SAVED_DATA_EXISTS, CN_LABEL_NONE);
+ #endif
+ 
+     switch (messageID) {
+@@ -2492,7 +2492,7 @@
+ #endif
+ 
+ #ifndef VERSION_EU
+-    INGAME_TEXT_COPY(textSoundSelect, TEXT_SOUND_SELECT);
++    INGAME_TEXT_COPY(textSoundSelect, TEXT_SOUND_SELECT, CN_LABEL_NONE);
+ #endif
+ 
+     // Print "SOUND SELECT" text
+@@ -2565,7 +2565,7 @@
+  */
+ void print_score_file_castle_secret_stars(s8 fileIndex, s16 x, s16 y) {
+     unsigned char secretStarsText[20];
+-    INGAME_TEXT_COPY(textStarX, TEXT_STAR_X);
++    INGAME_TEXT_COPY(textStarX, TEXT_STAR_X, CN_LABEL_STAR_X);
+     // Print "[star] x"
+     print_menu_generic_string(x, y, textStarX);
+     // Print number of castle secret stars
+@@ -2594,8 +2594,8 @@
+ void print_score_file_course_coin_score(s8 fileIndex, s16 courseIndex, s16 x, s16 y) {
+     unsigned char coinScoreText[20];
+     u8 stars = save_file_get_star_flags(fileIndex, courseIndex);
+-    INGAME_TEXT_COPY(textCoinX, TEXT_COIN_X);
+-    INGAME_TEXT_COPY(textStar, TEXT_STAR);
++    INGAME_TEXT_COPY(textCoinX, TEXT_COIN_X, CN_LABEL_COIN_X);
++    INGAME_TEXT_COPY(textStar, TEXT_STAR, CN_LABEL_STAR);
+ #if defined(VERSION_JP) || defined(VERSION_SH)
+     #define LENGTH 5
+ #else
+@@ -2689,15 +2689,15 @@
+  */
+ void print_save_file_scores(s8 fileIndex) {
+ #ifndef VERSION_EU
+-    INGAME_TEXT_COPY(textMario, TEXT_MARIO);
++    INGAME_TEXT_COPY(textMario, TEXT_MARIO, CN_LABEL_MARIO);
+ #ifdef VERSION_JP
+     unsigned char textFileLetter[] = { TEXT_ZERO };
+     void **levelNameTable = segmented_to_virtual(seg2_course_name_table);
+ #endif
+-    INGAME_TEXT_COPY(textHiScore, TEXT_HI_SCORE);
+-    INGAME_TEXT_COPY(textMyScore, TEXT_MY_SCORE);
++    INGAME_TEXT_COPY(textHiScore, TEXT_HI_SCORE, CN_LABEL_NONE);
++    INGAME_TEXT_COPY(textMyScore, TEXT_MY_SCORE, CN_LABEL_MY_SCORE);
+ #if defined(VERSION_US) || defined(VERSION_SH)
+-    INGAME_TEXT_COPY(textFileLetter, TEXT_ZERO);
++    INGAME_TEXT_COPY_MUTABLE(textFileLetter, TEXT_ZERO);
+     void **levelNameTable = segmented_to_virtual(seg2_course_name_table);
+ #endif
+ #else
+--- a/src/menu/ingame_text.h
++++ b/src/menu/ingame_text.h
+@@ -1,11 +1,49 @@
+ #pragma once
+ 
+-#define INGAME_TEXT_COPY(_var, _text) \
+-u8 _var[_text ## _LENGTH]; \
+-memcpy(_var, g ## _text, _text ## _LENGTH)
++#include "game/cn_font.h"
++
++// Declares `_var` as a `const u8 *` that points at the CN translation when the
++// text pack is active, and at a private stack copy of the vanilla ROM string
++// otherwise.
++//
++// The old form of this macro allocated a fixed-size array and memcpy'd into it:
++//     u8 _var[TEXT_STAR_LENGTH]; memcpy(_var, gTEXT_STAR, TEXT_STAR_LENGTH);
++// That cannot work for CN text, because a two-byte-per-character encoding has
++// no fixed relationship to the vanilla single-byte length -- "STAR" is 2 bytes
++// of vanilla but "星星" is 6 bytes of CN. Copying into the vanilla-sized array
++// would overflow it. Pointing at the shared read-only CN array sidesteps the
++// length problem entirely; the stack copy only has to be big enough for the
++// vanilla string, which is what TEXT_*_LENGTH already describes.
++//
++// `_id` is a CNLabelId from cn_font.h. Every vanilla render entry point takes
++// `const u8 *`, so the call sites need no changes beyond naming the label.
++#define INGAME_TEXT_COPY(_var, _text, _id) \
++    u8 _var ## _vanilla[_text ## _LENGTH]; \
++    memcpy(_var ## _vanilla, g ## _text, _text ## _LENGTH); \
++    const u8 *_var = cn_label_get(_id) ? cn_label_get(_id) \
++                                       : (const u8 *)_var ## _vanilla
+ 
+ #define INGAME_TEXT_PTR(_text) g ## _text
+ 
++// Mutable variant, for the call sites that overwrite the buffer after copying
++// (star_select's per-star number, file_select's save-slot letter and the
++// "MARIO A JUST ERASED" slot digit). Those all take CN_LABEL_NONE -- they hold
++// a digit or a letter, not translatable text -- but they must stay writable, so
++// they cannot use the const pointer form above.
++#define INGAME_TEXT_COPY_MUTABLE(_var, _text) \
++    u8 _var[_text ## _LENGTH]; \
++    memcpy(_var, g ## _text, _text ## _LENGTH)
++
++// Same, for a label the current build never draws (textCatch is US-unused).
++// __attribute__((unused)) has to sit on the pointer declaration itself, because
++// the macro now expands to a statement sequence rather than one declaration --
++// so the old "UNUSED u8 x[] = {...}" prefix no longer reaches it.
++#define INGAME_TEXT_COPY_UNUSED(_var, _text, _id) \
++    u8 _var ## _vanilla[_text ## _LENGTH]; \
++    memcpy(_var ## _vanilla, g ## _text, _text ## _LENGTH); \
++    const u8 *_var __attribute__((unused)) = \
++        cn_label_get(_id) ? cn_label_get(_id) : (const u8 *)_var ## _vanilla
++
+ #define TEXT_ZERO_LENGTH 2
+ #define TEXT_COIN_LENGTH 2
+ #define TEXT_STAR_LENGTH 2
+--- a/src/menu/intro_geo.c
++++ b/src/menu/intro_geo.c
+@@ -110,7 +110,19 @@
+         guScale(scaleMat, scaleX, scaleY, scaleZ);
+ 
+         gSPMatrix(dlIter++, scaleMat, G_MTX_MODELVIEW | G_MTX_MUL | G_MTX_PUSH);
++#if defined(SM64COOPDX_CN_TEXT)
++        // iQue replaced the wordmark mesh outright: the CN vertex block ends at
++        // 0x7A60 while the US one ends at 0x7E60, so this is a different model,
++        // not a texture swap. Both variants use the same scale tables and the
++        // same camera, which is why the CN data can drop straight in.
++        if (gCnTextPackActive) {
++            gSPDisplayList(dlIter++, cn_dl_logo);         // 神游马力欧
++        } else {
++            gSPDisplayList(dlIter++, &intro_seg7_dl_0700B3A0);
++        }
++#else
+         gSPDisplayList(dlIter++, &intro_seg7_dl_0700B3A0);  // draw model
++#endif
+         gSPPopMatrix(dlIter++, G_MTX_MODELVIEW);
+         gSPEndDisplayList(dlIter);
+ 
+@@ -145,7 +157,17 @@
+                 gDPSetRenderMode(dlIter++, G_RM_AA_XLU_SURF, G_RM_AA_XLU_SURF2);
+                 break;
+         }
++#if defined(SM64COOPDX_CN_TEXT)
++        // The CN card carries two copyright lines plus the TM mark; the US card
++        // has one line and no separate TM quad.
++        if (gCnTextPackActive) {
++            gSPDisplayList(dlIter++, cn_dl_copyright);
++        } else {
++            gSPDisplayList(dlIter++, &intro_seg7_dl_0700C6A0);  // draw model
++        }
++#else
+         gSPDisplayList(dlIter++, &intro_seg7_dl_0700C6A0);  // draw model
++#endif
+         gSPEndDisplayList(dlIter);
+ 
+         // Once the "Super Mario 64" logo has just about zoomed fully, fade in the "TM" and copyright text
+--- a/src/menu/intro_geo.h
++++ b/src/menu/intro_geo.h
+@@ -5,6 +5,14 @@
+ #include <PR/gbi.h>
+ 
+ #include "types.h"
++
++#if defined(SM64COOPDX_CN_TEXT)
++// Baked iQue title-intro geometry (src/menu/cn_intro_data.c). The wordmark and
++// the copyright card are compiled-in copies rather than ROM overlays because
++// the CN mesh has a different vertex count, which shifts the segment layout.
++extern const Gfx cn_dl_logo[];
++extern const Gfx cn_dl_copyright[];
++#endif
+ #include "engine/graph_node.h"
+ 
+ extern bool gSkipInterpolationTitleScreen;
+--- a/src/menu/star_select.c
++++ b/src/menu/star_select.c
+@@ -8,6 +8,7 @@
+ #include "engine/graph_node.h"
+ #include "eu_translation.h"
+ #include "game/area.h"
++#include "game/cn_font.h"
+ #include "game/game_init.h"
+ #include "game/ingame_menu.h"
+ #include "game/level_update.h"
+@@ -279,12 +280,32 @@
+ #ifdef VERSION_EU
+     unsigned char myScore[][10] = { {TEXT_MYSCORE}, {TEXT_MY_SCORE_FR}, {TEXT_MY_SCORE_DE} };
+ #else
+-    INGAME_TEXT_COPY(myScore, TEXT_MYSCORE);
++    // "MYSCORE" is one of the fixed labels the CN pack does translate, so this
++    // must ask for the label rather than pass CN_LABEL_NONE (which is what made
++    // this screen keep printing "MYSCORE" while the pause menu said 我的积分).
++    INGAME_TEXT_COPY(myScore, TEXT_MYSCORE, CN_LABEL_MY_SCORE);
+ #endif
+-    INGAME_TEXT_COPY(starNumbers, TEXT_ZERO);
++    INGAME_TEXT_COPY_MUTABLE(starNumbers, TEXT_ZERO);
+ 
+     const u8 *currLevelName = get_level_name_sm64(gCurrCourseNum, gCurrLevelNum, gCurrAreaIndex, 1);
++    // Prefer the CN-aware course table. get_level_name_sm64() round-trips the
++    // text through convert_string_sm64_to_ascii()/ascii_to_sm64(), which only
++    // understands the vanilla single-byte font, so Chinese course names come
++    // back as spaces. The table itself already holds iQue names once
++    // apply_cn_text_pack() has run, so this also follows the runtime toggle.
++    {
++        const u8 *cnName = ingame_menu_get_course_name(gCurrCourseNum);
++        if (cnName != NULL) { currLevelName = cnName; }
++    }
++
+     const u8 *selectedActName = get_star_name_sm64(gCurrCourseNum, sSelectedActIndex + 1, 1);
++    // Same for the act (star) name -- the vanilla helper mangles CN text too.
++    // Returns NULL for slots the CN table does not cover (secret courses and
++    // the synthetic 100-coin star), where we keep the vanilla string.
++    {
++        const u8 *cnName = ingame_menu_get_act_name(gCurrCourseNum, sSelectedActIndex + 1);
++        if (cnName != NULL) { selectedActName = cnName; }
++    }
+ #ifndef VERSION_EU
+     s16 lvlNameX;
+     s16 actNameX;
+@@ -309,16 +330,24 @@
+ #ifdef VERSION_EU
+         print_generic_string(95, 118, myScore[language]);
+ #else
+-        print_generic_string(102, 118, myScore);
++        // "我的积分" is 4 full-width cells (64px) where "MYSCORE" is 8 narrow
++        // ones (~48px), so the label has to start further left or it runs into
++        // the coin counter at x = 155. The official iQue build uses 89 here.
++        print_generic_string(cn_is_cn_string(myScore) ? 89 : 102, 118, myScore);
+ #endif
+     }
+ 
+     if ((gOverrideHideActSelectHud & ACT_SELECT_HUD_LEVEL_NAME) == 0 && currLevelName != NULL) {
++        // A CN course name is a 16px cell (two stacked 8px halves) where the
++        // vanilla name is 8px tall, so lift the line by half the extra height to
++        // keep it centred on the same spot. The official iQue build makes the
++        // same correction (it moves this line from y = 33 to y = 30).
++        s16 lvlNameY = cn_is_cn_string(currLevelName) ? 30 : 33;
+ #ifdef VERSION_EU
+-        print_generic_string(get_str_x_pos_from_center(160, (u8*) currLevelName + 3, 10.0f), 33, currLevelName + 3);
++        print_generic_string(get_str_x_pos_from_center(160, (u8*) currLevelName + 3, 10.0f), lvlNameY, currLevelName + 3);
+ #else
+         lvlNameX = get_str_x_pos_from_center(160, (u8*) currLevelName + 3, 10.0f);
+-        print_generic_string(lvlNameX, 33, currLevelName + 3);
++        print_generic_string(lvlNameX, lvlNameY, currLevelName + 3);
+ #endif
+     }
+ 
+@@ -335,11 +364,26 @@
+     gDPSetEnvColor(gDisplayListHead++, 0, 0, 0, 255);
+     // Print the name of the selected act.
+     if ((gOverrideHideActSelectHud & ACT_SELECT_HUD_ACT_NAME) == 0 && sVisibleStars != 0) {
++        // print_menu_generic_string() now walks CN two-byte tokens and draws the
++        // CJK cell through our own display list. Without that walk a byte-wise
++        // terminator test stops on the very first byte, because every CN act
++        // name starts with a full-width space (0xFF 0x9E) -- the line would come
++        // out blank.
++        //
++        // A CN glyph is 16px tall against the vanilla 8px, so lift the line by
++        // half the difference to keep it centred where it was.
++        //
++        // (The official iQue build instead reroutes this line through the dialog
++        // pipeline -- dl_ia_text_begin + print_generic_string -- and moves it to
++        // y = 141. That 60px jump is a layout change, not a font-metric one, so
++        // we deliberately keep the vanilla position here and only correct for
++        // the taller cell.)
++        s16 actNameY = cn_is_cn_string(selectedActName) ? 77 : 81;
+ #ifdef VERSION_EU
+-        print_menu_generic_string(get_str_x_pos_from_center(ACT_NAME_X, (u8*) selectedActName, 8.0f), 81, selectedActName);
++        print_menu_generic_string(get_str_x_pos_from_center(ACT_NAME_X, (u8*) selectedActName, 8.0f), actNameY, selectedActName);
+ #else
+         actNameX = get_str_x_pos_from_center(ACT_NAME_X, (u8*) selectedActName, 8.0f);
+-        print_menu_generic_string(actNameX, 81, selectedActName);
++        print_menu_generic_string(actNameX, actNameY, selectedActName);
+ #endif
+     }
+ 
