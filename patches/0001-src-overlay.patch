@@ -116,7 +116,7 @@
  }
 --- a/src/game/ingame_menu.c
 +++ b/src/game/ingame_menu.c
-@@ -39,6 +39,20 @@
+@@ -39,6 +39,42 @@
  #include "pc/lua/utils/smlua_text_utils.h"
  #include "menu/ingame_text.h"
  #include "pc/dialog_table.h"
@@ -134,10 +134,32 @@
 +#else
 +#define CN_PACK_ACTIVE() false
 +#endif
++
++// Is the dialog on screen laid out with iQue metrics?
++//
++// Read from the string that will actually be drawn, NOT from the pack switch.
++// The two normally agree, but Lua can break the tie: a mod (or a romhack --
++// they all go through smlua_text_utils_dialog_replace()) may overwrite a
++// dialog with its own English text, and apply_cn_text_pack() deliberately
++// leaves `replaced` entries alone, so the text stays English while the switch
++// is on. Deriving the geometry from the switch drew exactly that string with
++// CN metrics: 20px line pitch instead of 16, one line fewer per page and a
++// taller box. Layout is a property of the glyphs, so it has to follow the
++// glyphs (see `cn_dialog_registry` / cn_is_cn_string()).
++//
++// Set once per frame at the top of render_dialog_entries(); every geometry
++// decision below (box height, line pitch, page length, the two triangles) is
++// reached from that function with the same dialog.
++#if defined(SM64COOPDX_CN_TEXT)
++static bool sDialogLayoutCn = false;
++#define CN_DIALOG_LAYOUT() (sDialogLayoutCn)
++#else
++#define CN_DIALOG_LAYOUT() false
++#endif
  
  u16 gDialogColorFadeTimer;
  s8 gLastDialogLineNum;
-@@ -458,16 +472,61 @@
+@@ -458,16 +494,61 @@
      f32 largestWidth = 0;
      f32 width = 0;
      u8* d = dialog;
@@ -160,8 +182,7 @@
 +        }
 +
 +        if (tok.kind == CN_TOKEN_NEWLINE || (!tok.kind && d[pos] == DIALOG_CHAR_NEWLINE)) {
-             width = 0;
--            d++;
++            width = 0;
 +            pos += tok.kind ? tok.length : 1;
 +            continue;
 +        }
@@ -171,9 +192,8 @@
 +            width += (f32)gDialogCharWidths[DIALOG_CHAR_SPACE];
 +            largestWidth = MAX(width, largestWidth);
 +            pos += tok.length;
-             continue;
-         }
--        width += (f32)(gDialogCharWidths[*d]);
++            continue;
++        }
 +
 +        if (tok.kind == CN_TOKEN_GLYPH) {
 +            // Two-byte CN glyph: one full-width advance, not two byte widths.
@@ -190,10 +210,12 @@
 +        }
 +
 +        if (d[pos] == DIALOG_CHAR_NEWLINE) {
-+            width = 0;
+             width = 0;
+-            d++;
 +            pos++;
-+            continue;
-+        }
+             continue;
+         }
+-        width += (f32)(gDialogCharWidths[*d]);
 +
 +        width += (f32)gDialogCharWidths[d[pos]];
          largestWidth = MAX(width, largestWidth);
@@ -204,7 +226,7 @@
      return largestWidth;
  #endif
  }
-@@ -482,9 +541,33 @@
+@@ -482,9 +563,33 @@
  f32 get_generic_dialog_height(u8* dialog) {
      s32 lines = 0;
      u8* d = dialog;
@@ -241,7 +263,7 @@
      }
      return lines * 14;
  }
-@@ -508,6 +591,11 @@
+@@ -508,6 +613,11 @@
  #define MAX_STRING_WIDTH 16
  #endif
  
@@ -253,7 +275,7 @@
  /**
   * Prints a generic white string.
   * In JP/EU a IA1 texture is used but in US a IA4 texture is used.
-@@ -516,6 +604,10 @@
+@@ -516,6 +626,10 @@
      UNUSED s8 mark = DIALOG_MARK_NONE; // unused in EU
      s32 strPos = 0;
      u8 lineNum = 1;
@@ -264,7 +286,7 @@
  #ifdef VERSION_EU
      s16 xCoord = x;
      s16 yCoord = 240 - y;
-@@ -525,7 +617,71 @@
+@@ -525,7 +639,71 @@
      create_dl_translation_matrix(MENU_MTX_PUSH, x, y, 0.0f);
  #endif
  
@@ -337,7 +359,7 @@
          switch (str[strPos]) {
  #ifdef VERSION_EU
              case DIALOG_CHAR_SPACE:
-@@ -684,6 +840,40 @@
+@@ -684,6 +862,40 @@
  
      u32 xStride; // X separation
  
@@ -378,7 +400,7 @@
      if (hudLUT == HUD_LUT_JPMENU) {
          xStride = 16;
      } else { // HUD_LUT_GLOBAL
-@@ -758,14 +948,128 @@
+@@ -758,14 +970,128 @@
  }
  #endif
  
@@ -508,7 +530,7 @@
          switch (str[strPos]) {
  #ifdef VERSION_EU
              case DIALOG_CHAR_UPPER_A_UMLAUT:
-@@ -792,19 +1096,21 @@
+@@ -792,19 +1118,21 @@
                  curX += 4;
                  break;
              default:
@@ -534,7 +556,7 @@
  
                      mark = DIALOG_MARK_NONE;
                  }
-@@ -918,9 +1224,40 @@
+@@ -918,9 +1246,40 @@
  s16 get_str_x_pos_from_center(s16 centerPos, u8 *str, UNUSED f32 scale) {
      s16 strPos = 0;
      f32 spacesWidth = 0.0f;
@@ -577,7 +599,7 @@
          strPos++;
      }
      // return the x position of where the string starts as half the string's
-@@ -955,8 +1292,28 @@
+@@ -955,8 +1314,28 @@
  s16 get_string_width(u8 *str) {
      s16 strPos = 0;
      s16 width = 0;
@@ -607,7 +629,34 @@
          width += gDialogCharWidths[str[strPos]];
          strPos++;
      }
-@@ -1210,7 +1567,17 @@
+@@ -1093,6 +1472,26 @@
+     }
+ 
+     free(sOverrideDialogHookString);
++    sOverrideDialogHookString = NULL;
++
++    // An override from a mod cannot be shown together with the pack.
++    //
++    // The pack renders its own table (dialog_table_get_render), and that table
++    // holds the translation of the *vanilla* dialog. Arbitrary mod text has no
++    // Chinese image, so there is nothing to merge: accept either the mod's
++    // English or the pack's Chinese, and while the pack is on it is the pack.
++    // This is also what keeps a mod that round-trips DialogEntry.text alive:
++    // Character Select reads the US string (which is *not* what is on screen),
++    // optionally gsubs it, and hands it back -- installing that here would
++    // paint English over the Chinese text.
++    //
++    // Two things stay untouched: `openDialogBox = false` above (the API for
++    // "show nothing at all") and custom dialogs (id >= DIALOG_COUNT), which the
++    // pack does not cover, so dialog_table_render_is_cn() is false for them.
++    if (dialogTextOverride != NULL && dialog_table_render_is_cn(dialogId)) {
++        dialogTextOverride = NULL;
++    }
++
+     if (dialogTextOverride != NULL) {
+         sOverrideDialogHookString = convert_string_ascii_to_sm64(NULL, dialogTextOverride, false);
+     } else {
+@@ -1210,7 +1609,18 @@
      f32 dialogWidth = 130 * 1.1f;
      if (dialogWidth < gDialogMinWidth) dialogWidth = gDialogMinWidth;
      create_dl_translation_matrix(MENU_MTX_PUSH, X_VAL1, Y_VAL1, 0);
@@ -616,25 +665,27 @@
 +    // iQue gives the box one extra line of height on top of drawing one line
 +    // fewer per page (see totalLines below). That pairing is the whole trick:
 +    // the taller 16px CJK glyphs need the room, and the shorter page keeps the
-+    // text from filling it. Both halves must follow the same runtime switch as
-+    // the strings, otherwise the CN text overflows the US-sized box.
++    // text from filling it. Both halves must follow the same runtime decision
++    // as the strings, otherwise the CN text overflows the US-sized box -- or,
++    // in the mod-replaced case, English text sits in a box a line too tall.
 +    f32 boxLines = (f32) linesPerBox;
-+    if (CN_PACK_ACTIVE()) {
++    if (CN_DIALOG_LAYOUT()) {
 +        boxLines += 1.0f;
 +    }
 +    create_dl_scale_matrix(MENU_MTX_NOPUSH, dialogWidth / 130, (boxLines / Y_VAL2) + 0.1, 1.0f);
  
      gSPDisplayList(gDisplayListHead++, dl_draw_text_bg_box);
      gSPPopMatrix(gDisplayListHead++, G_MTX_MODELVIEW);
-@@ -1282,6 +1649,15 @@
+@@ -1282,6 +1692,16 @@
  #define Y_VAL3 16
  #endif
  
 +// iQue spaces dialog lines 20px apart (vs the US 16) so a 16px CJK glyph and
 +// its shadow do not touch the line below. Y_VAL3 is a compile-time constant, so
-+// the CN value has to be selected at each use.
++// the CN value has to be selected at each use -- from the per-dialog layout
++// flag, not from the pack switch (see CN_DIALOG_LAYOUT()).
 +#if defined(SM64COOPDX_CN_TEXT)
-+#define CN_DIALOG_LINE_H() (CN_PACK_ACTIVE() ? 20 : Y_VAL3)
++#define CN_DIALOG_LINE_H() (CN_DIALOG_LAYOUT() ? 20 : Y_VAL3)
 +#else
 +#define CN_DIALOG_LINE_H() (Y_VAL3)
 +#endif
@@ -642,7 +693,7 @@
  #ifdef VERSION_EU
  void handle_dialog_scroll_page_state(s8 lineNum, s8 totalLines, s8 *pageState, s8 *xMatrix)
  #else
-@@ -1299,7 +1675,7 @@
+@@ -1299,7 +1719,7 @@
  #ifdef VERSION_EU
      gDialogY += 16;
  #else
@@ -651,7 +702,7 @@
  
      linePos[0] = 0;
  #endif
-@@ -1453,6 +1829,9 @@
+@@ -1453,6 +1873,9 @@
  
      u8 *str = sOverrideDialogHookString != NULL ? sOverrideDialogHookString : segmented_to_virtual(dialog->str);
      s8 lineNum = 1;
@@ -661,7 +712,7 @@
  
      s8 totalLines;
  
-@@ -1470,9 +1849,14 @@
+@@ -1470,9 +1893,18 @@
      if (gDialogBoxState == DIALOG_STATE_HORIZONTAL) {
          // If scrolling, consider the number of lines for both
          // the current page and the page being scrolled to.
@@ -671,14 +722,18 @@
 +        // two-page scroll case). Together with the taller box and the 20px
 +        // line spacing this is what makes the CJK text breathe instead of
 +        // spilling out of the box.
-+        totalLines = CN_PACK_ACTIVE() ? (linesPerBox * 2 - 1) : (linesPerBox * 2 + 1);
++        //
++        // `cn` (the encoding of the string about to be drawn) rather than the
++        // pack switch: a Lua-replaced English dialog must still be paginated
++        // like vanilla, or its last line ends up alone on a second page.
++        totalLines = cn ? (linesPerBox * 2 - 1) : (linesPerBox * 2 + 1);
      } else {
 -        totalLines = linesPerBox + 1;
-+        totalLines = CN_PACK_ACTIVE() ? linesPerBox : (linesPerBox + 1);
++        totalLines = cn ? linesPerBox : (linesPerBox + 1);
      }
  
      gSPDisplayList(gDisplayListHead++, dl_ia_text_begin);
-@@ -1494,13 +1878,72 @@
+@@ -1494,13 +1926,72 @@
      }
  
  #ifndef VERSION_EU
@@ -752,19 +807,21 @@
          switch (strChar) {
              case DIALOG_CHAR_TERMINATOR:
                  pageState = DIALOG_PAGE_STATE_END;
-@@ -1733,7 +2176,21 @@
+@@ -1733,7 +2224,23 @@
          handle_menu_scrolling(MENU_SCROLL_HORIZONTAL, &gDialogLineNum, 1, 2);
      }
  
 -    create_dl_translation_matrix(MENU_MTX_NOPUSH, (gDialogLineNum * X_VAL4_1) - X_VAL4_2, Y_VAL4_1 - (gLastDialogLineNum * Y_VAL4_2), 0);
 +    // Choice marker geometry. iQue's CN build moves the marker a 20px line
 +    // lower (Y_VAL4_2 20 vs 16) and its X term is ((n - 1) * 58) + 0; this
-+    // function's folded `n * X - C` form expresses that as 58 / 58.
++    // function's folded `n * X - C` form expresses that as 58 / 58. Follow the
++    // dialog's own layout (CN_DIALOG_LAYOUT), since a Lua-replaced English
++    // dialog keeps the US 16px pitch no matter what the pack switch says.
 +    s32 xVal4_1 = X_VAL4_1;
 +    s32 xVal4_2 = X_VAL4_2;
 +    s32 yVal4_2 = Y_VAL4_2;
 +#if defined(SM64COOPDX_CN_TEXT)
-+    if (CN_PACK_ACTIVE()) {
++    if (CN_DIALOG_LAYOUT()) {
 +        xVal4_1 = 58;
 +        xVal4_2 = 58;
 +        yVal4_2 = 20;
@@ -775,7 +832,7 @@
  
      if (gDialogBoxType == DIALOG_TYPE_ROTATE) {
          gDPSetEnvColor(gDisplayListHead++, 255, 255, 255, 255);
-@@ -1774,7 +2231,16 @@
+@@ -1774,7 +2281,16 @@
      f32 triangleOffset = gDialogMinWidth - 143;
      if (triangleOffset < 0) triangleOffset = 0;
  
@@ -784,7 +841,7 @@
 +    // so it still sits at the bottom edge of the (one line taller) CN box.
 +    s32 yVal5_1 = Y_VAL5_1;
 +#if defined(SM64COOPDX_CN_TEXT)
-+    if (CN_PACK_ACTIVE()) {
++    if (CN_DIALOG_LAYOUT()) {
 +        yVal5_1 = -18;
 +    }
 +#endif
@@ -793,7 +850,49 @@
      create_dl_scale_matrix(MENU_MTX_NOPUSH, X_Y_VAL6, X_Y_VAL6, 1.0f);
      create_dl_rotation_matrix(MENU_MTX_NOPUSH, -DEFAULT_DIALOG_BOX_ANGLE, 0, 0, 1.0f);
  
-@@ -2363,16 +2829,40 @@
+@@ -1890,13 +2406,29 @@
+ #if defined(VERSION_US) || defined(VERSION_SH)
+     s8 lowerBound = 0;
+ #endif
+-    struct DialogEntry *dialog = dialog_table_get(gDialogID);
++    struct DialogEntry *dialog = dialog_table_get_render(gDialogID);
+ 
+     if (dialog == NULL) {
+         gDialogID = DIALOG_NONE;
+         return;
+     }
+ 
++    // Every geometry decision for this frame (box height, line pitch, page
++    // length, choice / next-page triangles) is derived from this one flag, so
++    // it is decided here, once, from the string the text renderer will draw.
++    // With the two tables (src/pc/dialog_table.c) that string is either wholly
++    // Chinese or wholly the US text -- there is no per-entry mixing left -- but
++    // the flag is still taken from the string rather than from the switch, so
++    // the geometry can never disagree with the glyphs. A HOOK_ON_DIALOG
++    // override is always ASCII here (the pack drops overrides for the dialogs
++    // it covers), hence vanilla layout.
++    // See CN_DIALOG_LAYOUT() at the top of the file.
++#if defined(SM64COOPDX_CN_TEXT)
++    sDialogLayoutCn = cn_is_cn_string(sOverrideDialogHookString != NULL
++                                      ? sOverrideDialogHookString
++                                      : (const u8 *) segmented_to_virtual(dialog->str));
++#endif
++
+ #ifdef VERSION_EU
+     gDialogX = 0;
+     gDialogY = 0;
+@@ -2185,7 +2717,9 @@
+ 
+ // "Dear Mario" message handler
+ void print_peach_letter_message(void) {
+-    struct DialogEntry *dialog = dialog_table_get(gDialogID);
++    // Same source as the dialog box: this prints the letter's dialog string, so
++    // it has to follow the pack table too rather than the US one.
++    struct DialogEntry *dialog = dialog_table_get_render(gDialogID);
+ 
+     const u8* str = sOverrideDialogHookString != NULL ? sOverrideDialogHookString : dialog->str;
+ 
+@@ -2363,16 +2897,40 @@
  #else
  #define CRS_NUM_X1 100
  #endif
@@ -834,7 +933,7 @@
  #endif
  
  void render_pause_my_score_coins(void) {
-@@ -2387,17 +2877,47 @@
+@@ -2387,17 +2945,47 @@
      };
  #define textMyScore textMyScore[gInGameLanguage]
  #else
@@ -887,7 +986,7 @@
      u8 starFlags;
  
      starFlags = save_file_get_star_flags(gCurrSaveFileNum - 1, gCurrCourseNum - 1);
-@@ -2416,19 +2936,27 @@
+@@ -2416,19 +3004,27 @@
      gDPSetEnvColor(gDisplayListHead++, 255, 255, 255, gDialogTextAlpha);
  
      if (courseIndex < COURSE_STAGES_COUNT && save_file_get_course_star_count(gCurrSaveFileNum - 1, courseIndex) != 0) {
@@ -916,7 +1015,7 @@
          print_generic_string(CRS_NUM_X1, 157, strCourseNum);
  #endif
  
-@@ -2441,19 +2969,19 @@
+@@ -2441,19 +3037,19 @@
              print_generic_string(ACT_NAME_X, 140, actName);
          }
  #ifndef VERSION_JP
@@ -940,7 +1039,7 @@
  #endif
      gSPDisplayList(gDisplayListHead++, dl_ia_text_end);
  }
-@@ -2469,8 +2997,8 @@
+@@ -2469,8 +3065,8 @@
  #endif
  
  void render_pause_camera_options(s16 x, s16 y, s8 *index, s16 xIndex) {
@@ -951,7 +1050,7 @@
  #ifdef VERSION_EU
      u8 textNormalUpClose[][20] = {
          { TEXT_NORMAL_UPCLOSE },
-@@ -2485,8 +3013,8 @@
+@@ -2485,8 +3081,8 @@
  #define textNormalUpClose textNormalUpClose[gInGameLanguage]
  #define textNormalFixed   textNormalFixed[gInGameLanguage]
  #else
@@ -962,7 +1061,7 @@
  #endif
  
      handle_menu_scrolling(MENU_SCROLL_HORIZONTAL, index, 1, 2);
-@@ -2494,10 +3022,27 @@
+@@ -2494,10 +3090,27 @@
      gSPDisplayList(gDisplayListHead++, dl_ia_text_begin);
      gDPSetEnvColor(gDisplayListHead++, 255, 255, 255, gDialogTextAlpha);
  
@@ -994,7 +1093,7 @@
  
      gSPDisplayList(gDisplayListHead++, dl_ia_text_end);
      create_dl_translation_matrix(MENU_MTX_PUSH, ((index[0] - 1) * xIndex) + x, y + Y_VAL7, 0);
-@@ -2524,8 +3069,15 @@
+@@ -2524,8 +3137,15 @@
  #endif
  
  void render_pause_course_options(s16 x, s16 y, s8 *index, s16 yIndex) {
@@ -1012,7 +1111,7 @@
  
  #ifdef VERSION_EU
      u8 textContinue[][10] = {
-@@ -2548,9 +3100,9 @@
+@@ -2548,9 +3168,9 @@
  #define textExitCourse   textExitCourse[gInGameLanguage]
  #define textCameraAngleR textCameraAngleR[gInGameLanguage]
  #else
@@ -1025,7 +1124,7 @@
  #endif
  
      handle_menu_scrolling(MENU_SCROLL_VERTICAL, index, 1, 4);
-@@ -2560,7 +3112,7 @@
+@@ -2560,7 +3180,7 @@
  
      print_generic_string(x + 10, y - 2, textContinue);
      print_generic_string(x + 10, y - 17, textExitCourse);
@@ -1034,7 +1133,7 @@
  
      if (index[0] != 4) {
          print_generic_string(x + 10, y - 47, textCameraAngleR);
-@@ -2630,12 +3182,85 @@
+@@ -2630,12 +3250,85 @@
      gDialogLineNum = courseDone;
  }
  
@@ -1121,7 +1220,7 @@
  #ifdef VERSION_EU
      print_hud_lut_string(HUD_LUT_GLOBAL, get_str_x_pos_from_center_scale(
                           SCREEN_WIDTH / 2, textPause, 12.0f), 81, textPause);
-@@ -2651,7 +3276,7 @@
+@@ -2651,7 +3344,7 @@
  
      u8 str[COURSE_STAGES_COUNT * 2];
  
@@ -1130,7 +1229,7 @@
  
      u8 starFlags = save_file_get_star_flags(fileNum, courseNum);
      u16 starCount = save_file_get_course_star_count(fileNum, courseNum);
-@@ -2686,12 +3311,40 @@
+@@ -2686,12 +3379,40 @@
      print_generic_string(x + 14, y + 13, str);
  }
  
@@ -1172,7 +1271,7 @@
  #endif
  
      u8 strVal[8];
-@@ -2725,12 +3378,15 @@
+@@ -2725,12 +3446,15 @@
      gSPDisplayList(gDisplayListHead++, dl_ia_text_begin);
      gDPSetEnvColor(gDisplayListHead++, 255, 255, 255, gDialogTextAlpha);
  
@@ -1194,7 +1293,7 @@
  
      if (gDialogLineNum < COURSE_STAGES_COUNT) {
          render_pause_castle_course_stars(x, y, gCurrSaveFileNum - 1, gDialogLineNum);
-@@ -2744,23 +3400,120 @@
+@@ -2744,23 +3468,120 @@
          print_generic_string(x - 17, y + 30, courseName);
  #endif
      } else {
@@ -1318,7 +1417,7 @@
  #define INDEX_FLAGS (COURSE_COUNT + 1)
  #define INDEX_MIN (-1)
  #define INDEX_MAX (INDEX_FLAGS + 1)
-@@ -2785,11 +3538,42 @@
+@@ -2785,11 +3606,42 @@
      return 0;
  }
  
@@ -1363,7 +1462,7 @@
      }
  #endif
      print_generic_string(x - width / 2, y, courseName);
-@@ -2853,7 +3637,7 @@
+@@ -2853,7 +3705,7 @@
  
      // Render the 100 coins star next to the coin counter for main courses
      if (isMainCourse && (stars & 0x40)) {
@@ -1372,7 +1471,7 @@
          print_generic_string(x + 89, y - 5, textStar);
      }
  
-@@ -2894,18 +3678,28 @@
+@@ -2894,18 +3746,28 @@
      gSPDisplayList(gDisplayListHead++, dl_ia_text_begin);
      gDPSetEnvColor(gDisplayListHead++, 255, 255, 255, gDialogTextAlpha);
  
@@ -1409,7 +1508,7 @@
          render_pause_castle_course_stars_extended(x + 20, y);
          print_generic_string(x + 54, y - 5, textCoin);
          int_to_str(save_file_get_course_coin_score(gCurrSaveFileNum - 1, gDialogLineNum), textCoinCount);
-@@ -2920,7 +3714,7 @@
+@@ -2920,7 +3782,7 @@
  
      // Castle stars (25)
      else if (gDialogLineNum == INDEX_CASTLE_STARS) {
@@ -1418,7 +1517,7 @@
          u8 textStarCount[8];
          render_pause_castle_course_name(courseName + 3, 160, y + 30);
          print_generic_string(x + 60, y + 13, textStar);
-@@ -3093,8 +3887,8 @@
+@@ -3093,8 +3955,8 @@
          { TEXT_HUD_CONGRATULATIONS_DE }
      };
  #else
@@ -1429,7 +1528,7 @@
  #endif
  
      u8 colorFade = sins(gDialogColorFadeTimer) * 50.0f + 200.0f;
-@@ -3103,6 +3897,14 @@
+@@ -3103,6 +3965,14 @@
      gDPSetEnvColor(gDisplayListHead++, colorFade, colorFade, colorFade, 255);
  
      if (str == HUD_PRINT_HISCORE) {
@@ -1444,7 +1543,7 @@
  #ifdef VERSION_EU
          print_hud_lut_string(HUD_LUT_GLOBAL, get_str_x_pos_from_center_scale(160, textHiScore[gInGameLanguage], 12.0f),
                    36, textHiScore[gInGameLanguage]);
-@@ -3110,6 +3912,14 @@
+@@ -3110,6 +3980,14 @@
          print_hud_lut_string(HUD_LUT_GLOBAL, TXT_HISCORE_X, TXT_HISCORE_Y, textHiScore);
  #endif
      } else { // HUD_PRINT_CONGRATULATIONS
@@ -1459,7 +1558,7 @@
  #ifdef VERSION_EU
          print_hud_lut_string(HUD_LUT_GLOBAL, get_str_x_pos_from_center_scale(160, textCongratulations[gInGameLanguage], 12.0f),
                    67, textCongratulations[gInGameLanguage]);
-@@ -3210,9 +4020,9 @@
+@@ -3210,9 +4088,9 @@
      u8 textSymStar[] = { GLYPH_STAR, GLYPH_SPACE };
  #define textCourse gTextCourseArr[gInGameLanguage]
  #else
@@ -1472,7 +1571,7 @@
      u8 textSymStar[] = { GLYPH_STAR, GLYPH_SPACE };
  #endif
      u8 *name;
-@@ -3224,6 +4034,13 @@
+@@ -3224,6 +4102,13 @@
          play_star_fanfare_and_flash_hud(1, 1 << (gLastCompletedStarNum - 1));
  
          name = (u8*) get_star_name_sm64(gLastCompletedCourseNum, gLastCompletedStarNum, 1);
@@ -1486,7 +1585,7 @@
  
          gSPDisplayList(gDisplayListHead++, dl_ia_text_begin);
          int_to_str(gLastCompletedCourseNum, strCourseNum);
-@@ -3236,6 +4053,17 @@
+@@ -3236,6 +4121,17 @@
          gSPDisplayList(gDisplayListHead++, dl_ia_text_end);
      } else if ((gLastCompletedCourseNum == COURSE_BITDW || gLastCompletedCourseNum == COURSE_BITFS) && gLastCollectedStarOrKey == 1) {
          name = (u8*) get_level_name_sm64(gLastCompletedCourseNum, gCurrLevelNum, gCurrAreaIndex, 1) + 3;
@@ -1504,7 +1603,7 @@
          gSPDisplayList(gDisplayListHead++, dl_ia_text_begin);
          gDPSetEnvColor(gDisplayListHead++, 0, 0, 0, gDialogTextAlpha);
  #ifdef VERSION_EU
-@@ -3257,6 +4085,13 @@
+@@ -3257,6 +4153,13 @@
          return;
      } else {
          name = (u8*) get_level_name_sm64(gLastCompletedCourseNum, gLastCompletedStarNum, gCurrAreaIndex, 1) + 3;
@@ -1518,7 +1617,7 @@
          print_hud_course_complete_coins(118, 103);
          play_star_fanfare_and_flash_hud(1, 1 << (gLastCompletedStarNum - 1));
      }
-@@ -3336,10 +4171,10 @@
+@@ -3336,10 +4239,10 @@
  #define textContinueWithoutSave textContinueWithoutSaveArr[gInGameLanguage]
      s16 xOffset = get_str_x_pos_from_center(160, textContinueWithoutSaveArr[gInGameLanguage], 12.0f);
  #else
@@ -1609,7 +1708,7 @@
      // resize string if it was allocated by this function
      if (shouldResizeString) {
          u8 *resizedStr64 = realloc(str64, (size_t) (str64End - str64));
-@@ -211,9 +231,43 @@
+@@ -211,9 +231,60 @@
      return (size_t) (str64 - str64Begin);
  }
  
@@ -1644,16 +1743,33 @@
 +    // A CN buffer cannot be expressed as single-byte text. Bail out with an
 +    // empty string rather than emitting mojibake; every in-game caller has a CN
 +    // path that reads the table pointer directly.
++    //
++    // It must be an *empty string*, never NULL, when the caller asked us to
++    // allocate. Returning NULL here used to break every mod that reads
++    // DialogEntry.text: dialog_table_init() stores this return value straight
++    // into `dialog->text`, which is exposed to Lua as a string field. With the
++    // pack on it was NULL for all 170 dialogs, so `dialog.text:gsub(...)` died
++    // with "attempt to index a nil value (field 'text')" (upstream issue #3,
++    // Character Select). Rendering was unaffected -- the renderer walks ->str
++    // -- so the breakage only showed up inside mods.
++    //
++    // Since the pack moved to its own dialog table, the US table this converts
++    // is ASCII in every build and this branch should not be reachable any more.
++    // Keep it correct anyway: it is the only thing standing between "a mod sees
++    // an empty string" and "a mod crashes".
 +    if (sm64_is_cn_text(str64)) {
-+        if (strAscii) { strAscii[0] = '\0'; }
++        if (strAscii == NULL) {
++            strAscii = malloc(1);
++            if (strAscii == NULL) { return NULL; }
++        }
++        strAscii[0] = '\0';
 +        return strAscii;
 +    }
-+    if (!str64) { return strAscii; }
 +
      // allocate string with maximum size
      bool shouldResizeString = false;
      if (!strAscii) {
-@@ -361,7 +415,18 @@
+@@ -361,7 +432,18 @@
  
      else if (!hasCustomName) {
          if (courseNum >= COURSE_MIN && courseNum < COURSE_MAX) {
@@ -1673,7 +1789,7 @@
              const u8 *courseName = segmented_to_virtual(courseNameTbl[courseNum - COURSE_BOB]);
              convert_string_sm64_to_ascii(output, courseName + 3);
              charCase = MIN(charCase, 0); // Don't need to capitalize vanilla course names
-@@ -428,7 +493,10 @@
+@@ -428,7 +510,10 @@
      // Main courses: BOB to RR
      else if (COURSE_IS_MAIN_COURSE(courseNum)) {
          if (starIndex >= 0 && starIndex < MAX_ACTS) {
@@ -2070,64 +2186,274 @@
  extern unsigned int configPvpType;
 --- a/src/pc/dialog_table.c
 +++ b/src/pc/dialog_table.c
-@@ -8,6 +8,7 @@
+@@ -3,14 +3,72 @@
+ #include "dialog_ids.h"
+ #include "PR/ultratypes.h"
+ #include "game/segment2.h"
++#include "game/cn_rom_assets.h"
+ #include "pc/lua/utils/smlua_text_utils.h"
+ #include "game/memory.h"
  #include "game/level_info.h"
  #include "pc/platform.h"
  #include <stdlib.h>
 +#include <string.h>
++
++// Two dialog tables, on purpose.
++//
++// `gDialogTable` is the game's own table: the US text, copied out of
++// seg2_dialog_original[] (which holds the vanilla ROM data in every build). The
++// Lua text layer reads and writes *this* one -- smlua_text_utils_dialog_get(),
++// smlua_replace_dialog(), dialog_get()/dialog_set() in Lua, Character Select's
++// HOOK_ON_DIALOG round trip. A mod's replacement lives here and nowhere else.
++//
++// `sDialogTableCn` is the iQue pack's table: strings, page heights and box
++// geometry straight out of the 神游 rom. Nothing writes to it except
++// dialog_table_refresh_cn(), and no mod can reach it, because every entry point
++// the Lua API uses goes through dialog_table_get().
++//
++// Why the split (upstream request): arbitrary mod text cannot be translated, so
++// while the pack shared the single table both sources had to share one entry per
++// dialog. That coupling is what produced "replaced text stays English but is
++// drawn with Chinese line spacing" -- the text came from the mod, the geometry
++// from the pack. Two tables make the bad state unrepresentable: the renderer
++// draws exactly one of them, so the string, the line pitch, the page length and
++// the box height always come from the same source. The runtime switch now means
++// "which table is on screen" and nothing else.
++//
++// Fallback rules, both deliberate:
++//   * no rom (or a rom that does not cover this entry) -> the CN entry has
++//     str == NULL and the renderer uses the US entry: no cartridge, no Chinese.
++//   * custom dialogs (id >= DIALOG_COUNT) exist only in the US table; they are
++//     mod content and the pack has nothing to say about them.
  
  DialogTable *gDialogTable = NULL;
  
-@@ -57,6 +58,42 @@
-     return gDialogTable->buffer[dialogId];
- }
- 
-+// Re-copy every vanilla entry from seg2_dialog_original[].
-+//
-+// dialog_table_init() runs before chinese_text_pack_init(), so its memcpy sees
-+// the *static initialiser* values: in a CN build that is the Chinese string but
-+// the US linesPerBox (the initialiser comes from dialogs.h, which does not know
-+// about the pack). apply_cn_text_pack() only rewrites the originals, never
-+// these heap copies, so the renderer kept paginating with 3 lines for a dialog
-+// iQue gives 4 -- the race with Koopa the Quick overflowed its box and broke
-+// two lines early. The same staleness made the runtime toggle look like a
-+// no-op for dialogs (the copies still pointed at the previous set).
-+//
-+// Entries flagged `replaced` belong to the Lua text layer and are left alone.
-+void dialog_table_sync_vanilla(void) {
-+    u32 i;
++#if defined(SM64COOPDX_CN_TEXT)
++static DialogTable *sDialogTableCn = NULL;
++#endif
 +
-+    if (gDialogTable == NULL) { return; }
++// Allocate one entry from `table`. Shared by both tables; only the US table ever
++// grows at runtime (Lua custom dialogs), so `dialogId` is the US id space.
++static struct DialogEntry *dialog_table_alloc_from(DialogTable *table, s32 *dialogId) {
++    if (table == NULL) { return NULL; }
 +
-+    for (i = 0; i < DIALOG_COUNT && i < gDialogTable->count; i++) {
-+        struct DialogEntry *dialog = gDialogTable->buffer[i];
-+        const struct DialogEntry *orig;
-+        char *oldText;
-+
-+        if (dialog == NULL || dialog->replaced) { continue; }
-+
-+        orig = smlua_text_utils_dialog_get_unmodified(i);
-+        if (orig == NULL) { continue; }
-+
-+        // `str` belongs to the original (static data) -- only `text` was
-+        // allocated by convert_string_sm64_to_ascii().
-+        oldText = dialog->text;
-+        memcpy(dialog, orig, sizeof(struct DialogEntry));
-+        dialog->text = convert_string_sm64_to_ascii(NULL, dialog->str);
-+        free(oldText);
++    if (table->count >= MAX_ALLOCATED_DIALOGS) {
++        LOG_LUA_WARNING("Dialog limit reached! (%d max)", MAX_ALLOCATED_DIALOGS);
++        if (dialogId) *dialogId = DIALOG_NONE;
++        return NULL;
 +    }
++
++    struct DialogEntry* dialog = growing_array_alloc(table, sizeof(struct DialogEntry));
++
++    if (!dialog) {
++        LOG_LUA_WARNING("Failed to allocate DialogEntry");
++        if (dialogId) *dialogId = DIALOG_NONE;
++        return NULL;
++    }
++
++    if (dialogId) *dialogId = table->count - 1;
++
++    return dialog;
 +}
 +
+ void dialog_table_init(void) {
+     gDialogTable = growing_array_init(gDialogTable, 256, malloc, free);
+ 
+@@ -23,38 +81,102 @@
+         }
+ 
+         memcpy(dialog, dialogOrig, sizeof(struct DialogEntry));
++        // The US strings are ASCII in every build (the pack has its own table),
++        // so this is a real conversion and `text` is never NULL.
+         dialog->text = convert_string_sm64_to_ascii(NULL, dialog->str);
+     }
++
++#if defined(SM64COOPDX_CN_TEXT)
++    sDialogTableCn = growing_array_init(sDialogTableCn, DIALOG_COUNT + 1, malloc, free);
++    for (u32 i = 0; i < DIALOG_COUNT; i++) {
++        struct DialogEntry *cn = dialog_table_alloc_from(sDialogTableCn, NULL);
++        if (!cn) {
++            sys_fatal("Failed to allocate Chinese DialogEntry for dialog ID %d", i);
++        }
++        memset(cn, 0, sizeof(struct DialogEntry));
++    }
++    dialog_table_refresh_cn();
++#endif
+ }
+ 
+ struct DialogEntry* dialog_table_alloc(s32 *dialogId) {
+-    DialogTable *table = gDialogTable;
++    return dialog_table_alloc_from(gDialogTable, dialogId);
++}
+ 
+-    if (table->count >= MAX_ALLOCATED_DIALOGS) {
+-        LOG_LUA_WARNING("Dialog limit reached! (%d max)", MAX_ALLOCATED_DIALOGS);
+-        if (dialogId) *dialogId = DIALOG_NONE;
++struct DialogEntry* dialog_table_get(s32 dialogId) {
++    if (!IS_VALID_DIALOG(dialogId)) {
+         return NULL;
+     }
+ 
+-    struct DialogEntry* dialog = growing_array_alloc(table, sizeof(struct DialogEntry));
++    return gDialogTable->buffer[dialogId];
++}
+ 
+-    if (!dialog) {
+-        LOG_LUA_WARNING("Failed to allocate DialogEntry");
+-        if (dialogId) *dialogId = DIALOG_NONE;
+-        return NULL;
++#if defined(SM64COOPDX_CN_TEXT)
++// Pull the pack's dialog entries out of the rom.
++//
++// Called from apply_cn_text_pack() (startup, the settings toggle, and every Lua
++// reset) rather than once from dialog_table_init(), because the rom can finish
++// loading after this table exists.
++void dialog_table_refresh_cn(void) {
++    u32 i;
++
++    if (sDialogTableCn == NULL || gDialogTable == NULL) { return; }
++
++    for (i = 0; i < DIALOG_COUNT && i < sDialogTableCn->count; i++) {
++        struct DialogEntry *cn = sDialogTableCn->buffer[i];
++        const struct DialogEntry *orig = smlua_text_utils_dialog_get_unmodified(i);
++        const u8 *str = cn_rom_dialog_str(i);
++
++        if (cn == NULL || orig == NULL) { continue; }
++
++        cn->unused = orig->unused;
++        // .text stays NULL: it is the Lua-facing ASCII view of a string, and Lua
++        // only ever sees gDialogTable (see the note at the top of the file).
++        cn->text = NULL;
++        cn->replaced = false;
++        cn->str = str;
++
++        if (str != NULL) {
++            // The iQue table carries its own geometry per entry (DIALOG_005 is
++            // 4 lines, DIALOG_117 is 2). The box height, the page break and the
++            // scissor window are all derived from linesPerBox.
++            cn->linesPerBox = (s8) cn_rom_dialog_lines(i);
++            cn->leftOffset = (s16) cn_rom_dialog_left(i);
++            cn->width = (s16) cn_rom_dialog_width(i);
++        } else {
++            // No rom: keep the vanilla metrics so nothing reads garbage. This
++            // entry is not drawn anyway -- str == NULL makes it fall back.
++            cn->linesPerBox = orig->linesPerBox;
++            cn->leftOffset = orig->leftOffset;
++            cn->width = orig->width;
++        }
+     }
+-
+-    if (dialogId) *dialogId = table->count - 1;
+-
+-    return dialog;
+ }
++#else
++void dialog_table_refresh_cn(void) {
++}
++#endif
+ 
+-struct DialogEntry* dialog_table_get(s32 dialogId) {
++struct DialogEntry* dialog_table_get_render(s32 dialogId) {
+     if (!IS_VALID_DIALOG(dialogId)) {
+         return NULL;
+     }
+ 
+-    return gDialogTable->buffer[dialogId];
++#if defined(SM64COOPDX_CN_TEXT)
++    if (gCnTextPackActive && IS_VALID_VANILLA_DIALOG(dialogId) && sDialogTableCn != NULL) {
++        struct DialogEntry *cn = sDialogTableCn->buffer[dialogId];
++        if (cn != NULL && cn->str != NULL) {
++            return cn;
++        }
++    }
++#endif
++
++    return dialog_table_get(dialogId);
++}
++
++bool dialog_table_render_is_cn(s32 dialogId) {
++    if (!IS_VALID_DIALOG(dialogId)) { return false; }
++    return dialog_table_get_render(dialogId) != dialog_table_get(dialogId);
+ }
+ 
  void dialog_table_reset(void) {
+@@ -62,6 +184,8 @@
+ 
+     if (!table) return;
+ 
++    // Only the US table carries `replaced` entries; the CN table is rebuilt from
++    // the rom by dialog_table_refresh_cn() and has nothing to undo.
+     for (u32 i = 0; i < table->count; i++) {
+         struct DialogEntry *dialog = table->buffer[i];
+ 
+@@ -83,18 +207,32 @@
+ void dialog_table_shutdown(void) {
      DialogTable *table = gDialogTable;
  
+-    if (!table) return;
++    if (table) {
++        dialog_table_reset();
+ 
+-    dialog_table_reset();
++        for (u32 i = 0; i < DIALOG_COUNT; i++) {
++            struct DialogEntry *dialog = table->buffer[i];
+ 
+-    for (u32 i = 0; i < DIALOG_COUNT; i++) {
+-        struct DialogEntry *dialog = table->buffer[i];
++            free(dialog->text);
++            free(dialog);
++        }
+ 
+-        free(dialog->text);
+-        free(dialog);
++        free(table->buffer);
++        free(table);
++        gDialogTable = NULL;
+     }
+ 
+-    free(table->buffer);
+-    free(table);
+-    gDialogTable = NULL;
+-}
+\ 文件末尾没有换行符
++#if defined(SM64COOPDX_CN_TEXT)
++    // The CN entries own nothing but pointers into the rom's segment, so the
++    // entries and the array are all there is to release.
++    if (sDialogTableCn != NULL) {
++        for (u32 i = 0; i < sDialogTableCn->count; i++) {
++            free(sDialogTableCn->buffer[i]);
++        }
++
++        free(sDialogTableCn->buffer);
++        free(sDialogTableCn);
++        sDialogTableCn = NULL;
++    }
++#endif
++}
 --- a/src/pc/dialog_table.h
 +++ b/src/pc/dialog_table.h
-@@ -11,6 +11,7 @@
+@@ -10,7 +10,24 @@
+ 
  void dialog_table_init(void);
  struct DialogEntry* dialog_table_alloc(s32 *dialogId);
++
++// The US table: what the Lua text layer reads and writes (smlua_text_utils_*).
++// Never contains Chinese; a mod's replacement lands here and stays here.
  struct DialogEntry* dialog_table_get(s32 dialogId);
-+void dialog_table_sync_vanilla(void);
++
++// The table the renderer should draw: the iQue pack's own entries while the
++// pack is on and the rom is loaded, the US table otherwise. Falls back to the
++// US entry for custom dialogs and when the rom is missing.
++struct DialogEntry* dialog_table_get_render(s32 dialogId);
++
++// True when dialog_table_get_render() would return the Chinese entry, i.e. the
++// pack supplies this dialog and a mod's override cannot be merged into it.
++bool dialog_table_render_is_cn(s32 dialogId);
++
++// Rebuild the Chinese table from the loaded rom. Cheap; safe to call when the
++// table or the rom is absent (it then leaves the entries in "no rom" state).
++void dialog_table_refresh_cn(void);
++
  void dialog_table_reset(void);
  void dialog_table_shutdown(void);
  
@@ -2316,6 +2642,50 @@
  }
  
  struct DialogEntry* smlua_text_utils_dialog_get(enum DialogId dialogId) {
+@@ -194,6 +253,34 @@
+     return segmented_to_virtual(dialogTableOrg[dialogId]);
+ }
+ 
++// True when this call cannot change anything: same text, same layout.
++//
++// Why it has to exist: several mods (Character Select, notably) read
++// `DialogEntry.text` in HOOK_ON_DIALOG and feed it straight back into
++// dialog_replace(), optionally through a gsub that matches nothing. That is
++// semantically a no-op, but the pack cannot survive the round trip on the byte
++// level -- a CN string is a two-byte token stream, and
++// convert_string_sm64_to_ascii() deliberately reports it as an empty string
++// (there is no ASCII image of it). So the mod would hand us "" and
++// smlua_text_utils_convert() would install a genuinely empty string, replacing
++// the Chinese text with nothing: the dialog box then draws with the right
++// height and no glyphs at all, which is what a signpost looked like with
++// Character Select enabled (upstream issue #3, follow-up).
++//
++// Comparing against the live entry instead of against "did the pack produce
++// this" keeps it honest: if a mod really does want different text, the strings
++// differ and the override goes through as before.
++static bool dialog_replace_is_noop(const struct DialogEntry *dialog, u32 unused,
++                                   s8 linesPerBox, s16 leftOffset, s16 width,
++                                   const char *str) {
++    if (dialog->text == NULL || str == NULL) { return false; }
++    return dialog->unused == unused
++        && dialog->linesPerBox == linesPerBox
++        && dialog->leftOffset == leftOffset
++        && dialog->width == width
++        && strcmp(dialog->text, str) == 0;
++}
++
+ void smlua_text_utils_dialog_replace(enum DialogId dialogId, UNUSED u32 unused, s8 linesPerBox, s16 leftOffset, s16 width, const char* str) {
+     if (!IS_VALID_DIALOG(dialogId)) { return; }
+ 
+@@ -201,6 +288,8 @@
+ 
+     if (!dialog) { return; }
+ 
++    if (dialog_replace_is_noop(dialog, unused, linesPerBox, leftOffset, width, str)) { return; }
++
+     if (dialog->replaced) {
+         free((u8*)dialog->str);
+     }
 --- a/src/pc/pc_main.c
 +++ b/src/pc/pc_main.c
 @@ -18,6 +18,8 @@
@@ -2603,7 +2973,7 @@
 +#undef CASTLE_SECRET_STARS
 --- a/text/define_text.inc.c
 +++ b/text/define_text.inc.c
-@@ -1,20 +1,87 @@
+@@ -1,12 +1,63 @@
  // == dialog ==
  // (defines en_dialog_table etc.)
  
@@ -2655,30 +3025,19 @@
 +#undef DEFINE_DIALOG
 +
 +#if defined(SM64COOPDX_CN_TEXT)
-+// Non-const so apply_cn_text_pack() can repoint .str at runtime
-+// (DialogEntry.str is already a mutable pointer to const data) and switch
-+// .linesPerBox between the vanilla and iQue page heights.
++// The "original" entry is vanilla in every build now: the iQue strings live in
++// their own table (src/pc/dialog_table.c) so a mod's replacement can never
++// collide with them, and this one is what the Lua text layer calls
++// "unmodified". Nothing repoints it at runtime any more, hence `const`.
 +//
-+// The initial value stays the vanilla number and apply_cn_text_pack() corrects
-+// it, because where the two disagree (DIALOG_005 3->4, DIALOG_117 1->2) the
-+// whole box depends on it: the height scale, the page-break line and the
-+// scissor window are all derived from dialog->linesPerBox. Keeping the US value
-+// drew a box one line too short, so the last line of text hung out of it.
-+//
-+// .str starts on the vanilla buffer rather than NULL for the same reason: if
-+// anything ever reads a dialog entry before the pack has been applied, drawing
-+// English is a bad outcome, but dereferencing NULL is a crash.
-+#define DEFINE_DIALOG(id, unused, linesPerBox, leftOffset, width, _) \
-+    static struct DialogEntry dialog_entry_orig_ ## id = { \
-+        unused, linesPerBox, leftOffset, width, dialog_text_ ## id, NULL, false \
-+    };
-+#else
++// .str points at the ROM-backed vanilla buffer rather than NULL: if anything
++// ever reads a dialog entry before the pack has been applied, drawing English
++// is a bad outcome, but dereferencing NULL is a crash.
++#endif
  #define DEFINE_DIALOG(id, unused, linesPerBox, leftOffset, width, _) \
      static const struct DialogEntry dialog_entry_orig_ ## id = { \
          unused, linesPerBox, leftOffset, width, dialog_text_ ## id, NULL, false \
-     };
-+#endif
- 
+@@ -15,6 +66,12 @@
  #include "dialogs.h"
  
  #undef DEFINE_DIALOG
@@ -2691,7 +3050,7 @@
  #define DEFINE_DIALOG(id, _1, _2, _3, _4, _5) &dialog_entry_orig_ ## id,
  
  const struct DialogEntry *const seg2_dialog_original[] = {
-@@ -35,6 +102,11 @@
+@@ -35,6 +92,19 @@
  // == acts ==
  // (defines en_act_name_table etc.)
  
@@ -2700,14 +3059,6 @@
 +// apply_cn_text_pack() can switch the act-name table at runtime. The macro
 +// args are strings in the CN course source, so the CN path must not use them
 +// as array bounds.
- #define COURSE_ACTS(id, name, a,b,c,d,e,f) \
-     static u8 act_name_ ## id ## _1[a] = { 0xFF }; \
-     static u8 act_name_ ## id ## _2[b] = { 0xFF }; \
-@@ -42,6 +114,15 @@
-     static u8 act_name_ ## id ## _4[d] = { 0xFF }; \
-     static u8 act_name_ ## id ## _5[e] = { 0xFF }; \
-     static u8 act_name_ ## id ## _6[f] = { 0xFF };
-+#else
 +#define COURSE_ACTS(id, name, a,b,c,d,e,f) \
 +    static u8 act_name_ ## id ## _1[a] = { 0xFF }; \
 +    static u8 act_name_ ## id ## _2[b] = { 0xFF }; \
@@ -2715,11 +3066,19 @@
 +    static u8 act_name_ ## id ## _4[d] = { 0xFF }; \
 +    static u8 act_name_ ## id ## _5[e] = { 0xFF }; \
 +    static u8 act_name_ ## id ## _6[f] = { 0xFF };
++#else
+ #define COURSE_ACTS(id, name, a,b,c,d,e,f) \
+     static u8 act_name_ ## id ## _1[a] = { 0xFF }; \
+     static u8 act_name_ ## id ## _2[b] = { 0xFF }; \
+@@ -42,6 +112,7 @@
+     static u8 act_name_ ## id ## _4[d] = { 0xFF }; \
+     static u8 act_name_ ## id ## _5[e] = { 0xFF }; \
+     static u8 act_name_ ## id ## _6[f] = { 0xFF };
 +#endif
  
  #define SECRET_STAR(id, name)
  #define CASTLE_SECRET_STARS(str)
-@@ -55,20 +136,166 @@
+@@ -55,20 +126,199 @@
  #undef COURSE_ACTS
  #undef EXTRA_TEXT
  
@@ -2741,7 +3100,8 @@
 +#include "courses.h"
 +    NULL
 +};
-+
+ 
+-const u8* seg2_act_name_table[] = {
 +// Vanilla (ROM-backed) mirror: the "off" side of the switch. In non-CN builds
 +// this is identical to seg2_act_name_table.
 +//
@@ -2757,8 +3117,7 @@
 +    (u8 *)(void *)act_name_ ## id ## _1, (u8 *)(void *)act_name_ ## id ## _2, (u8 *)(void *)act_name_ ## id ## _3, \
 +    (u8 *)(void *)act_name_ ## id ## _4, (u8 *)(void *)act_name_ ## id ## _5, (u8 *)(void *)act_name_ ## id ## _6,
 +#define EXTRA_TEXT(id, str) (const u8 *)(void *)extra_text_ ## id,
- 
--const u8* seg2_act_name_table[] = {
++
 +const u8 *const cn_act_name_vanilla[] = {
  #include "courses.h"
      NULL
@@ -2807,16 +3166,15 @@
 +    // cn_is_cn_string() can walk it without needing the count.
 +    u32 cnRegIdx = 0;
 +
-+    // dialogs: text pointer AND page height. Both have to follow the same
-+    // switch -- a CN string paginated with the US line count overflows the box.
-+// NOTE: the third macro parameter must NOT be named `linesPerBox`. The body
-+// below also reads *and* writes the struct field of that name, and the C
-+// preprocessor replaces every occurrence of a parameter name in the macro body
-+// -- `.linesPerBox` would be rewritten to `.4` (the argument) and the file
-+// would fail to compile. Hence `_lines`.
-+#define DEFINE_DIALOG(id, _1, _lines, _3, _4, _5) \
-+    dialog_entry_orig_ ## id.str = gCnTextPackActive ? cn_dialog_ ## id : dialog_text_ ## id; \
-+    dialog_entry_orig_ ## id.linesPerBox = gCnTextPackActive ? cn_dialog_lines_ ## id : (_lines); \
++    // dialogs: fill the registry only.
++    //
++    // The strings and page heights are NOT copied out of here any more. They
++    // live in their own table (src/pc/dialog_table.c), which the renderer picks
++    // instead of the US table while the pack is on; that is what keeps a mod's
++    // smlua_replace_dialog() from ever touching Chinese text. What still has to
++    // happen here is the registry, because cn_is_cn_string() identifies CN text
++    // by pointer and the pointers come from the rom.
++#define DEFINE_DIALOG(id, _1, _2, _3, _4, _5) \
 +    cn_dialog_registry[cnRegIdx++] = (u8 *)cn_dialog_ ## id;
 +
 +#include "dialogs.h"
@@ -2846,12 +3204,43 @@
 +        #define CN_COURSE_SLOTS 26
 +        #define CN_ACT_SLOTS    200
 +
++        // Which slots does this function own?
++        //
++        // The two tables are shared with the Lua text layer: a mod (and every
++        // romhack -- they all go through smlua_text_utils_course_name_replace()
++        // / act_name_replace) can install its own English name in any slot, and
++        // that pointer is a heap buffer it owns. Repointing such a slot at the
++        // pack's arrays does not just lose the mod's name, it also loses the
++        // only reference to its buffer (reset_course_or_act_name() will later
++        // see a pointer it does not own and skip the free).
++        //
++        // A slot is ours to rewrite only when it currently holds something this
++        // function itself installed: the vanilla buffer, the rom's CN name, or
++        // NULL. Anything else was put there at runtime and must stay -- the same
++        // policy as `DialogEntry.replaced` for dialogs, for the same reason: a
++        // mod's text is not translatable.
++        //
++        // `cn_rom_*` is consulted regardless of gCnTextPackActive because it is
++        // just the loader's pointer; that keeps the test symmetric, so turning
++        // the pack *off* still recognises (and replaces) the CN names it
++        // installed the last time it ran.
++        //
++        // No keep[] array: the test runs inline in the vanilla pass, and the CN
++        // overlay below recognises the slots it may touch by "still holds the
++        // vanilla pointer". A slot a mod owns never reaches that state here.
++        #define CN_IS_OURS(p, vanilla, cn) \
++            ((p) == NULL || (p) == (const u8 *)(vanilla) || (p) == (cn))
++
 +        // The vanilla buffers first: this is what the pack shows when it is
 +        // off, and it is the starting point every toggle returns to.
 +        for (i = 0; i < CN_COURSE_SLOTS && cn_course_name_vanilla[i] != NULL; i++) {
++            if (!CN_IS_OURS(seg2_course_name_table[i], cn_course_name_vanilla[i],
++                            cn_rom_course_name(i))) { continue; }
 +            seg2_course_name_table[i] = (u8 *)cn_course_name_vanilla[i];
 +        }
 +        for (i = 0; i < CN_ACT_SLOTS && cn_act_name_vanilla[i] != NULL; i++) {
++            if (!CN_IS_OURS(seg2_act_name_table[i], cn_act_name_vanilla[i],
++                            cn_rom_act_name(i))) { continue; }
 +            seg2_act_name_table[i] = (u8 *)cn_act_name_vanilla[i];
 +        }
 +
@@ -2863,30 +3252,33 @@
 +            // The act overlay stops at 90 (15 stages x 6 acts). Slots 90..96 are
 +            // the port's extra texts, which the Lua text layer addresses by
 +            // index and expects to be the vanilla buffers.
-+            for (i = 0; i < CN_COURSE_SLOTS; i++) {
++            for (i = 0; i < CN_COURSE_SLOTS && cn_course_name_vanilla[i] != NULL; i++) {
 +                const u8 *p = cn_rom_course_name(i);
++                if (seg2_course_name_table[i] != cn_course_name_vanilla[i]) { continue; }
 +                if (p != NULL) { seg2_course_name_table[i] = (u8 *)p; }
 +            }
-+            for (i = 0; i < 90; i++) {
++            for (i = 0; i < 90 && cn_act_name_vanilla[i] != NULL; i++) {
 +                const u8 *p = cn_rom_act_name(i);
++                if (seg2_act_name_table[i] != cn_act_name_vanilla[i]) { continue; }
 +                if (p != NULL) { seg2_act_name_table[i] = (u8 *)p; }
 +            }
 +        }
 +
++        #undef CN_IS_OURS
 +        #undef CN_COURSE_SLOTS
 +        #undef CN_ACT_SLOTS
 +    }
 +
-+    // The dialog entries the renderer actually uses live in a heap copy made by
-+    // dialog_table_init(), which ran before this function ever did -- so those
-+    // copies still carry the static initialiser's US linesPerBox. Push the
-+    // freshly switched values (str *and* page height) into them, otherwise the
-+    // CN text is paginated with the US line count and overflows the box.
-+    // Declared here rather than included: this file is textconv'd and included
-+    // from segment2.c, which has no reason to pull in the PC dialog table.
++    // The dialog strings live in their own table, so the only thing to do here
++    // is make sure it is current: apply_cn_text_pack() also runs after the rom
++    // finishes loading and after every Lua reset (smlua_text_utils_reset_all),
++    // and refresh is cheap and idempotent.
++    //
++    // Declared rather than included: this file is textconv'd and included from
++    // segment2.c, which has no reason to pull in the PC dialog table.
 +    {
-+        extern void dialog_table_sync_vanilla(void);
-+        dialog_table_sync_vanilla();
++        extern void dialog_table_refresh_cn(void);
++        dialog_table_refresh_cn();
 +    }
 +}
 +#endif
