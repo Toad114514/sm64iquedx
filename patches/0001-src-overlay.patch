@@ -182,10 +182,12 @@
 +        }
 +
 +        if (tok.kind == CN_TOKEN_NEWLINE || (!tok.kind && d[pos] == DIALOG_CHAR_NEWLINE)) {
-+            width = 0;
+             width = 0;
+-            d++;
 +            pos += tok.kind ? tok.length : 1;
-+            continue;
-+        }
+             continue;
+         }
+-        width += (f32)(gDialogCharWidths[*d]);
 +
 +        if (tok.kind == CN_TOKEN_SPACE) {
 +            // A CN full-width space advances the cursor but is not visible.
@@ -210,12 +212,10 @@
 +        }
 +
 +        if (d[pos] == DIALOG_CHAR_NEWLINE) {
-             width = 0;
--            d++;
++            width = 0;
 +            pos++;
-             continue;
-         }
--        width += (f32)(gDialogCharWidths[*d]);
++            continue;
++        }
 +
 +        width += (f32)gDialogCharWidths[d[pos]];
          largestWidth = MAX(width, largestWidth);
@@ -656,27 +656,43 @@
      if (dialogTextOverride != NULL) {
          sOverrideDialogHookString = convert_string_ascii_to_sm64(NULL, dialogTextOverride, false);
      } else {
-@@ -1210,7 +1609,18 @@
+@@ -1210,7 +1609,34 @@
      f32 dialogWidth = 130 * 1.1f;
      if (dialogWidth < gDialogMinWidth) dialogWidth = gDialogMinWidth;
      create_dl_translation_matrix(MENU_MTX_PUSH, X_VAL1, Y_VAL1, 0);
 -    create_dl_scale_matrix(MENU_MTX_NOPUSH, dialogWidth / 130, ((f32) linesPerBox / Y_VAL2) + 0.1, 1.0f);
 +
-+    // iQue gives the box one extra line of height on top of drawing one line
-+    // fewer per page (see totalLines below). That pairing is the whole trick:
-+    // the taller 16px CJK glyphs need the room, and the shorter page keeps the
-+    // text from filling it. Both halves must follow the same runtime decision
-+    // as the strings, otherwise the CN text overflows the US-sized box -- or,
-+    // in the mod-replaced case, English text sits in a box a line too tall.
-+    f32 boxLines = (f32) linesPerBox;
++    // The background box is a 130x80 quad (see shade_screen()), stretched in y
++    // so its 80 units cover the text window. Vanilla writes that stretch as
++    // `linesPerBox / Y_VAL2`, and Y_VAL2 exists only so the result equals
++    //     linesPerBox * lineHeight / 80
++    // with lineHeight 16 (US/EU) or 20 (JP/SH): 80 units of box per 80px of
++    // text, plus a flat 0.1 that leaves 8px of clearance under the last line.
++    //
++    // Written in pixels rather than as `linesPerBox / Y_VAL2` because the line
++    // height now depends on the string, not on the build, and the two forms
++    // only agree at the vanilla page heights. With 6 CJK lines the old form
++    // gives 7/5 + 0.1 = 1.5, i.e. exactly 120px of box for 120px of text --
++    // zero clearance, so the bottom of the last line (and its drop shadow)
++    // hangs out of the box. The real answer is 6*20/80 + 0.1 = 1.6 = 128px.
++    //
++    // Same runtime decision as the strings, like everything else here: a
++    // Lua-replaced English dialog keeps the US line height and the US box.
++    f32 lineHeight = 16.0f;
++#if defined(VERSION_JP) || defined(VERSION_SH)
++    lineHeight = 20.0f;
++#endif
++#if defined(SM64COOPDX_CN_TEXT)
 +    if (CN_DIALOG_LAYOUT()) {
-+        boxLines += 1.0f;
++        lineHeight = 20.0f;
 +    }
-+    create_dl_scale_matrix(MENU_MTX_NOPUSH, dialogWidth / 130, (boxLines / Y_VAL2) + 0.1, 1.0f);
++#endif
++    create_dl_scale_matrix(MENU_MTX_NOPUSH, dialogWidth / 130,
++                           ((f32) linesPerBox * lineHeight) / 80.0f + 0.1f, 1.0f);
  
      gSPDisplayList(gDisplayListHead++, dl_draw_text_bg_box);
      gSPPopMatrix(gDisplayListHead++, G_MTX_MODELVIEW);
-@@ -1282,6 +1692,16 @@
+@@ -1282,6 +1708,31 @@
  #define Y_VAL3 16
  #endif
  
@@ -690,10 +706,25 @@
 +#define CN_DIALOG_LINE_H() (Y_VAL3)
 +#endif
 +
++// Lines one page holds. US pages break after `linesPerBox` lines
++// (`totalLines = linesPerBox + 1`, the +1 being the exclusive end); iQue keeps
++// that formula's shape but passes `linesPerBox` itself, so its pages are one
++// line shorter -- the freed line is spent on the one-line-taller box.
++//
++// Everything that measures "one page" must use this, not linesPerBox: the
++// scissor window (a window one line taller lets the next page slide into the
++// bottom of the box mid-scroll), the scroll distance (one line too far and the
++// text jumps back when the page flips) and the line index under the scroll.
++#if defined(SM64COOPDX_CN_TEXT)
++#define CN_DIALOG_PAGE_LINES(linesPerBox, cn) (((cn) && (linesPerBox) > 1) ? (linesPerBox) - 1 : (linesPerBox))
++#else
++#define CN_DIALOG_PAGE_LINES(linesPerBox, cn) (linesPerBox)
++#endif
++
  #ifdef VERSION_EU
  void handle_dialog_scroll_page_state(s8 lineNum, s8 totalLines, s8 *pageState, s8 *xMatrix)
  #else
-@@ -1299,7 +1719,7 @@
+@@ -1299,7 +1750,7 @@
  #ifdef VERSION_EU
      gDialogY += 16;
  #else
@@ -702,7 +733,7 @@
  
      linePos[0] = 0;
  #endif
-@@ -1453,6 +1873,9 @@
+@@ -1453,6 +1904,9 @@
  
      u8 *str = sOverrideDialogHookString != NULL ? sOverrideDialogHookString : segmented_to_virtual(dialog->str);
      s8 lineNum = 1;
@@ -712,28 +743,49 @@
  
      s8 totalLines;
  
-@@ -1470,9 +1893,18 @@
+@@ -1467,12 +1921,19 @@
+     s16 linePos = 0;
+ #endif
+ 
++    // Page length, from the same helper the window and the scroll use, so the
++    // break, the scissor and the roll can never count a different number of
++    // lines (see CN_DIALOG_PAGE_LINES).
++    //
++    // `cn` (the encoding of the string about to be drawn) rather than the pack
++    // switch: a Lua-replaced English dialog must still be paginated like
++    // vanilla, or its last line ends up alone on a second page.
      if (gDialogBoxState == DIALOG_STATE_HORIZONTAL) {
          // If scrolling, consider the number of lines for both
          // the current page and the page being scrolled to.
 -        totalLines = linesPerBox * 2 + 1;
-+        //
-+        // iQue shows one line fewer than US on every page (and in the
-+        // two-page scroll case). Together with the taller box and the 20px
-+        // line spacing this is what makes the CJK text breathe instead of
-+        // spilling out of the box.
-+        //
-+        // `cn` (the encoding of the string about to be drawn) rather than the
-+        // pack switch: a Lua-replaced English dialog must still be paginated
-+        // like vanilla, or its last line ends up alone on a second page.
-+        totalLines = cn ? (linesPerBox * 2 - 1) : (linesPerBox * 2 + 1);
++        totalLines = CN_DIALOG_PAGE_LINES(linesPerBox, cn) * 2 + 1;
      } else {
 -        totalLines = linesPerBox + 1;
-+        totalLines = cn ? linesPerBox : (linesPerBox + 1);
++        totalLines = CN_DIALOG_PAGE_LINES(linesPerBox, cn) + 1;
      }
  
      gSPDisplayList(gDisplayListHead++, dl_ia_text_begin);
-@@ -1494,13 +1926,72 @@
+@@ -1486,7 +1947,19 @@
+ #ifdef VERSION_EU
+         gDialogY -= gDialogScrollOffsetY;
+ #else
++        // The interpolator draws between sDialogOffsetPrev and sDialogOffset,
++        // i.e. up to one logic step (linesPerBox * 2 px) ahead of the offset the
++        // scroll state machine has reached. That step does not divide a page,
++        // so on the last frame it would run past the page break and the flip
++        // would jerk the text back by the remainder. Clamping the lookahead to
++        // one page makes the final frame land exactly on the next page's first
++        // line, which is what the redraw that follows shows.
++        s32 pageHeight = CN_DIALOG_PAGE_LINES(linesPerBox, cn) * CN_DIALOG_LINE_H();
++
+         sDialogOffset = gDialogScrollOffsetY + dialog->linesPerBox * 2;
++        if (sDialogOffset > pageHeight) {
++            sDialogOffset = pageHeight;
++        }
+         sDialogOffsetPrev = gDialogScrollOffsetY;
+         sDialogOffsetPos = gDisplayListHead;
+         create_dl_translation_matrix(MENU_MTX_NOPUSH, 0, (f32) sDialogOffsetPrev, 0);
+@@ -1494,13 +1967,72 @@
      }
  
  #ifndef VERSION_EU
@@ -807,7 +859,7 @@
          switch (strChar) {
              case DIALOG_CHAR_TERMINATOR:
                  pageState = DIALOG_PAGE_STATE_END;
-@@ -1733,7 +2224,23 @@
+@@ -1733,7 +2265,23 @@
          handle_menu_scrolling(MENU_SCROLL_HORIZONTAL, &gDialogLineNum, 1, 2);
      }
  
@@ -832,7 +884,7 @@
  
      if (gDialogBoxType == DIALOG_TYPE_ROTATE) {
          gDPSetEnvColor(gDisplayListHead++, 255, 255, 255, 255);
-@@ -1774,7 +2281,16 @@
+@@ -1774,7 +2322,16 @@
      f32 triangleOffset = gDialogMinWidth - 143;
      if (triangleOffset < 0) triangleOffset = 0;
  
@@ -850,7 +902,7 @@
      create_dl_scale_matrix(MENU_MTX_NOPUSH, X_Y_VAL6, X_Y_VAL6, 1.0f);
      create_dl_rotation_matrix(MENU_MTX_NOPUSH, -DEFAULT_DIALOG_BOX_ANGLE, 0, 0, 1.0f);
  
-@@ -1890,13 +2406,29 @@
+@@ -1890,13 +2447,61 @@
  #if defined(VERSION_US) || defined(VERSION_SH)
      s8 lowerBound = 0;
  #endif
@@ -878,10 +930,77 @@
 +                                      : (const u8 *) segmented_to_virtual(dialog->str));
 +#endif
 +
++    // Line pitch, page length, and the same two numbers folded into the
++    // scissor / scroll arithmetic.
++    //
++    // DIAG_VAL4 exists only to turn "80 / DIAG_VAL4" into the line height:
++    // JP/SH use 80/4 = 20, US/EU use 80/5 = 16. So `rows * 80 / DIAG_VAL4` is
++    // "rows * pitch", and every window below is a count of *rows*, not of
++    // linesPerBox. Compiling for US and then drawing 20px-pitch CJK glyphs into
++    // a `linesPerBox * 16` window crops the bottom of the last line as soon as
++    // `linesPerBox > 4` -- with 5 lines the text is (5-1)*20 + 16 = 96px tall
++    // while the scissor only allows 80. That is upstream issue #2.
++    //
++    // The row count is the *page* length, not linesPerBox: iQue pages are one
++    // line shorter (see CN_DIALOG_PAGE_LINES). Using linesPerBox here builds a
++    // window/scroll one line taller than the text that flows through it, so the
++    // first line of the next page slides into the bottom of the box during the
++    // scroll and the box's lower border slices through it -- and the scroll then
++    // runs a whole line past the page break, so the text jerks backwards when
++    // the page flips.
++    //
++    // Chosen from CN_DIALOG_LAYOUT(), like every other geometry value here: a
++    // Lua-replaced English dialog keeps the US pitch and the US window even
++    // when the pack is on.
++    s32 diagPitch = DIAG_VAL1;
++    s32 diagRowsPerBox = DIAG_VAL4;
++    s32 diagPageLines = CN_DIALOG_PAGE_LINES(dialog->linesPerBox, CN_DIALOG_LAYOUT());
++#if defined(SM64COOPDX_CN_TEXT)
++    if (CN_DIALOG_LAYOUT()) {
++        diagPitch = 20;
++        diagRowsPerBox = 4;
++    }
++#endif
++
  #ifdef VERSION_EU
      gDialogX = 0;
      gDialogY = 0;
-@@ -2185,7 +2717,9 @@
+@@ -1945,13 +2550,15 @@
+         case DIALOG_STATE_HORIZONTAL:
+             gDialogScrollOffsetY += dialog->linesPerBox * 2;
+ 
+-            if (gDialogScrollOffsetY >= dialog->linesPerBox * DIAG_VAL1) {
++            // The scroll ends exactly when one page has rolled past, so the
++            // last frame is indistinguishable from the redraw of the next page.
++            if (gDialogScrollOffsetY >= diagPageLines * diagPitch) {
+                 gDialogTextPos = gLastDialogPageStrPos;
+                 gDialogBoxState = DIALOG_STATE_VERTICAL;
+                 gDialogScrollOffsetY = 0;
+             }
+ #if !defined(VERSION_JP)
+-            lowerBound = (gDialogScrollOffsetY / DIAG_VAL1) + 1;
++            lowerBound = (gDialogScrollOffsetY / diagPitch) + 1;
+ #endif
+             break;
+         case DIALOG_STATE_CLOSING:
+@@ -1986,13 +2593,13 @@
+     render_dialog_box_type(dialog, dialog->linesPerBox);
+ 
+ #ifdef VERSION_EU
+-    u32 scissorHeight = ensure_nonnegative((240 - dialog->width) + ((dialog->linesPerBox * 80) / DIAG_VAL4) / gDialogBoxScale);
++    u32 scissorHeight = ensure_nonnegative((240 - dialog->width) + ((diagPageLines * 80) / diagRowsPerBox) / gDialogBoxScale);
+ #else
+-    u32 scissorHeight = ensure_nonnegative(240 + ((dialog->linesPerBox * 80) / DIAG_VAL4) - dialog->width);
++    u32 scissorHeight = ensure_nonnegative(240 + ((diagPageLines * 80) / diagRowsPerBox) - dialog->width);
+ #endif
+     u32 scissorY = ensure_nonnegative(DIAG_VAL2 - dialog->width);
+     if (gOverrideDialogPos) {
+-        scissorHeight = ensure_nonnegative(((dialog->linesPerBox * 80) / DIAG_VAL4) + gDialogOverrideY + 5);
++        scissorHeight = ensure_nonnegative(((diagPageLines * 80) / diagRowsPerBox) + gDialogOverrideY + 5);
+         scissorY = ensure_nonnegative(gDialogOverrideY + 5);
+     }
+ 
+@@ -2185,7 +2792,9 @@
  
  // "Dear Mario" message handler
  void print_peach_letter_message(void) {
@@ -892,7 +1011,7 @@
  
      const u8* str = sOverrideDialogHookString != NULL ? sOverrideDialogHookString : dialog->str;
  
-@@ -2363,16 +2897,40 @@
+@@ -2363,16 +2972,40 @@
  #else
  #define CRS_NUM_X1 100
  #endif
@@ -933,7 +1052,7 @@
  #endif
  
  void render_pause_my_score_coins(void) {
-@@ -2387,17 +2945,47 @@
+@@ -2387,17 +3020,47 @@
      };
  #define textMyScore textMyScore[gInGameLanguage]
  #else
@@ -986,7 +1105,7 @@
      u8 starFlags;
  
      starFlags = save_file_get_star_flags(gCurrSaveFileNum - 1, gCurrCourseNum - 1);
-@@ -2416,19 +3004,27 @@
+@@ -2416,19 +3079,27 @@
      gDPSetEnvColor(gDisplayListHead++, 255, 255, 255, gDialogTextAlpha);
  
      if (courseIndex < COURSE_STAGES_COUNT && save_file_get_course_star_count(gCurrSaveFileNum - 1, courseIndex) != 0) {
@@ -1015,7 +1134,7 @@
          print_generic_string(CRS_NUM_X1, 157, strCourseNum);
  #endif
  
-@@ -2441,19 +3037,19 @@
+@@ -2441,19 +3112,19 @@
              print_generic_string(ACT_NAME_X, 140, actName);
          }
  #ifndef VERSION_JP
@@ -1039,7 +1158,7 @@
  #endif
      gSPDisplayList(gDisplayListHead++, dl_ia_text_end);
  }
-@@ -2469,8 +3065,8 @@
+@@ -2469,8 +3140,8 @@
  #endif
  
  void render_pause_camera_options(s16 x, s16 y, s8 *index, s16 xIndex) {
@@ -1050,7 +1169,7 @@
  #ifdef VERSION_EU
      u8 textNormalUpClose[][20] = {
          { TEXT_NORMAL_UPCLOSE },
-@@ -2485,8 +3081,8 @@
+@@ -2485,8 +3156,8 @@
  #define textNormalUpClose textNormalUpClose[gInGameLanguage]
  #define textNormalFixed   textNormalFixed[gInGameLanguage]
  #else
@@ -1061,7 +1180,7 @@
  #endif
  
      handle_menu_scrolling(MENU_SCROLL_HORIZONTAL, index, 1, 2);
-@@ -2494,10 +3090,27 @@
+@@ -2494,10 +3165,27 @@
      gSPDisplayList(gDisplayListHead++, dl_ia_text_begin);
      gDPSetEnvColor(gDisplayListHead++, 255, 255, 255, gDialogTextAlpha);
  
@@ -1093,7 +1212,7 @@
  
      gSPDisplayList(gDisplayListHead++, dl_ia_text_end);
      create_dl_translation_matrix(MENU_MTX_PUSH, ((index[0] - 1) * xIndex) + x, y + Y_VAL7, 0);
-@@ -2524,8 +3137,15 @@
+@@ -2524,8 +3212,15 @@
  #endif
  
  void render_pause_course_options(s16 x, s16 y, s8 *index, s16 yIndex) {
@@ -1111,7 +1230,7 @@
  
  #ifdef VERSION_EU
      u8 textContinue[][10] = {
-@@ -2548,9 +3168,9 @@
+@@ -2548,9 +3243,9 @@
  #define textExitCourse   textExitCourse[gInGameLanguage]
  #define textCameraAngleR textCameraAngleR[gInGameLanguage]
  #else
@@ -1124,7 +1243,7 @@
  #endif
  
      handle_menu_scrolling(MENU_SCROLL_VERTICAL, index, 1, 4);
-@@ -2560,7 +3180,7 @@
+@@ -2560,7 +3255,7 @@
  
      print_generic_string(x + 10, y - 2, textContinue);
      print_generic_string(x + 10, y - 17, textExitCourse);
@@ -1133,7 +1252,7 @@
  
      if (index[0] != 4) {
          print_generic_string(x + 10, y - 47, textCameraAngleR);
-@@ -2630,12 +3250,85 @@
+@@ -2630,12 +3325,85 @@
      gDialogLineNum = courseDone;
  }
  
@@ -1220,7 +1339,7 @@
  #ifdef VERSION_EU
      print_hud_lut_string(HUD_LUT_GLOBAL, get_str_x_pos_from_center_scale(
                           SCREEN_WIDTH / 2, textPause, 12.0f), 81, textPause);
-@@ -2651,7 +3344,7 @@
+@@ -2651,7 +3419,7 @@
  
      u8 str[COURSE_STAGES_COUNT * 2];
  
@@ -1229,7 +1348,7 @@
  
      u8 starFlags = save_file_get_star_flags(fileNum, courseNum);
      u16 starCount = save_file_get_course_star_count(fileNum, courseNum);
-@@ -2686,12 +3379,40 @@
+@@ -2686,12 +3454,40 @@
      print_generic_string(x + 14, y + 13, str);
  }
  
@@ -1271,7 +1390,7 @@
  #endif
  
      u8 strVal[8];
-@@ -2725,12 +3446,15 @@
+@@ -2725,12 +3521,15 @@
      gSPDisplayList(gDisplayListHead++, dl_ia_text_begin);
      gDPSetEnvColor(gDisplayListHead++, 255, 255, 255, gDialogTextAlpha);
  
@@ -1293,7 +1412,7 @@
  
      if (gDialogLineNum < COURSE_STAGES_COUNT) {
          render_pause_castle_course_stars(x, y, gCurrSaveFileNum - 1, gDialogLineNum);
-@@ -2744,23 +3468,120 @@
+@@ -2744,23 +3543,120 @@
          print_generic_string(x - 17, y + 30, courseName);
  #endif
      } else {
@@ -1417,7 +1536,7 @@
  #define INDEX_FLAGS (COURSE_COUNT + 1)
  #define INDEX_MIN (-1)
  #define INDEX_MAX (INDEX_FLAGS + 1)
-@@ -2785,11 +3606,42 @@
+@@ -2785,11 +3681,42 @@
      return 0;
  }
  
@@ -1462,7 +1581,7 @@
      }
  #endif
      print_generic_string(x - width / 2, y, courseName);
-@@ -2853,7 +3705,7 @@
+@@ -2853,7 +3780,7 @@
  
      // Render the 100 coins star next to the coin counter for main courses
      if (isMainCourse && (stars & 0x40)) {
@@ -1471,7 +1590,7 @@
          print_generic_string(x + 89, y - 5, textStar);
      }
  
-@@ -2894,18 +3746,28 @@
+@@ -2894,18 +3821,28 @@
      gSPDisplayList(gDisplayListHead++, dl_ia_text_begin);
      gDPSetEnvColor(gDisplayListHead++, 255, 255, 255, gDialogTextAlpha);
  
@@ -1508,7 +1627,7 @@
          render_pause_castle_course_stars_extended(x + 20, y);
          print_generic_string(x + 54, y - 5, textCoin);
          int_to_str(save_file_get_course_coin_score(gCurrSaveFileNum - 1, gDialogLineNum), textCoinCount);
-@@ -2920,7 +3782,7 @@
+@@ -2920,7 +3857,7 @@
  
      // Castle stars (25)
      else if (gDialogLineNum == INDEX_CASTLE_STARS) {
@@ -1517,7 +1636,7 @@
          u8 textStarCount[8];
          render_pause_castle_course_name(courseName + 3, 160, y + 30);
          print_generic_string(x + 60, y + 13, textStar);
-@@ -3093,8 +3955,8 @@
+@@ -3093,8 +4030,8 @@
          { TEXT_HUD_CONGRATULATIONS_DE }
      };
  #else
@@ -1528,7 +1647,7 @@
  #endif
  
      u8 colorFade = sins(gDialogColorFadeTimer) * 50.0f + 200.0f;
-@@ -3103,6 +3965,14 @@
+@@ -3103,6 +4040,14 @@
      gDPSetEnvColor(gDisplayListHead++, colorFade, colorFade, colorFade, 255);
  
      if (str == HUD_PRINT_HISCORE) {
@@ -1543,7 +1662,7 @@
  #ifdef VERSION_EU
          print_hud_lut_string(HUD_LUT_GLOBAL, get_str_x_pos_from_center_scale(160, textHiScore[gInGameLanguage], 12.0f),
                    36, textHiScore[gInGameLanguage]);
-@@ -3110,6 +3980,14 @@
+@@ -3110,6 +4055,14 @@
          print_hud_lut_string(HUD_LUT_GLOBAL, TXT_HISCORE_X, TXT_HISCORE_Y, textHiScore);
  #endif
      } else { // HUD_PRINT_CONGRATULATIONS
@@ -1558,7 +1677,7 @@
  #ifdef VERSION_EU
          print_hud_lut_string(HUD_LUT_GLOBAL, get_str_x_pos_from_center_scale(160, textCongratulations[gInGameLanguage], 12.0f),
                    67, textCongratulations[gInGameLanguage]);
-@@ -3210,9 +4088,9 @@
+@@ -3210,9 +4163,9 @@
      u8 textSymStar[] = { GLYPH_STAR, GLYPH_SPACE };
  #define textCourse gTextCourseArr[gInGameLanguage]
  #else
@@ -1571,7 +1690,7 @@
      u8 textSymStar[] = { GLYPH_STAR, GLYPH_SPACE };
  #endif
      u8 *name;
-@@ -3224,6 +4102,13 @@
+@@ -3224,6 +4177,13 @@
          play_star_fanfare_and_flash_hud(1, 1 << (gLastCompletedStarNum - 1));
  
          name = (u8*) get_star_name_sm64(gLastCompletedCourseNum, gLastCompletedStarNum, 1);
@@ -1585,7 +1704,7 @@
  
          gSPDisplayList(gDisplayListHead++, dl_ia_text_begin);
          int_to_str(gLastCompletedCourseNum, strCourseNum);
-@@ -3236,6 +4121,17 @@
+@@ -3236,6 +4196,17 @@
          gSPDisplayList(gDisplayListHead++, dl_ia_text_end);
      } else if ((gLastCompletedCourseNum == COURSE_BITDW || gLastCompletedCourseNum == COURSE_BITFS) && gLastCollectedStarOrKey == 1) {
          name = (u8*) get_level_name_sm64(gLastCompletedCourseNum, gCurrLevelNum, gCurrAreaIndex, 1) + 3;
@@ -1603,7 +1722,7 @@
          gSPDisplayList(gDisplayListHead++, dl_ia_text_begin);
          gDPSetEnvColor(gDisplayListHead++, 0, 0, 0, gDialogTextAlpha);
  #ifdef VERSION_EU
-@@ -3257,6 +4153,13 @@
+@@ -3257,6 +4228,13 @@
          return;
      } else {
          name = (u8*) get_level_name_sm64(gLastCompletedCourseNum, gLastCompletedStarNum, gCurrAreaIndex, 1) + 3;
@@ -1617,7 +1736,7 @@
          print_hud_course_complete_coins(118, 103);
          play_star_fanfare_and_flash_hud(1, 1 << (gLastCompletedStarNum - 1));
      }
-@@ -3336,10 +4239,10 @@
+@@ -3336,10 +4314,10 @@
  #define textContinueWithoutSave textContinueWithoutSaveArr[gInGameLanguage]
      s16 xOffset = get_str_x_pos_from_center(160, textContinueWithoutSaveArr[gInGameLanguage], 12.0f);
  #else
