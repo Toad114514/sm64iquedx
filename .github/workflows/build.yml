@@ -318,14 +318,41 @@ jobs:
       # ISCC 编译通过只说明脚本语法没问题，装得对不对没人验。静默装到一个
       # 临时目录、检查主程序在不在、再静默卸掉 —— 三条都过了才算向导能用。
       # /DIR 是原生程序参数，必须是 Windows 路径。
+      #
+      # ⚠️ 必须关掉 MSYS2 的参数改写。这个 job 的默认 shell 是 msys2，它会把
+      # 「/ 开头」的 argv 当成 POSIX 路径改写（/VERYSILENT → C:/msys64/VERYSILENT，
+      # /DIR=C:\... → 同样被改坏）。Inno 认不出这些开关就当没传，于是**弹图形向导
+      # 等人点下一步**；无头 runner 上没人可点，就一路挂到 job 超时。
+      # 首次上线时正是如此：编译只用 8 分半，冒烟步骤挂了 5 小时 49 分，
+      # 最后被 6 小时 job 上限杀掉（run 43164325739）。mkexe.sh 调 ISCC 时的
+      # /D 参数踩的是同一个坑，见那里的注释。
+      #
+      # timeout-minutes 是第二道保险：即使将来又冒出别的「等输入」型挂起，
+      # 也只在十分钟内失败，不会白烧掉整个 job 预算。
       - name: 冒烟测试安装向导（静默安装 → 检查 → 卸载）
+        timeout-minutes: 10
         run: |
           set -e
+          MSYS2_ARG_CONV_EXCL='*'
+          export MSYS2_ARG_CONV_EXCL
+
           setup=$(ls ./*-setup.exe | head -n 1)
           echo "被测安装包：${setup}"
           target="$PWD/smoke-install"
-          rm -rf "$target"
-          ./"$setup" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART "/DIR=$(cygpath -w "$target")"
+          log="$PWD/smoke-install.log"
+          rm -rf "$target" "$log"
+
+          # 装不上时把 Inno 自己的日志打出来，比只报「没有 exe」好查得多
+          dump_log() {
+            echo "── 安装日志（末 60 行）──"
+            tail -n 60 "$log" 2>/dev/null || echo "（没有日志文件）"
+            echo "── 目录内容 ──"
+            ls -la "$target" 2>/dev/null || echo "（目录不存在）"
+          }
+          trap 'dump_log' EXIT
+
+          ./"$setup" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG="$(cygpath -w "$log")" \
+                     "/DIR=$(cygpath -w "$target")"
           test -f "$target/sm64coopdx.exe" || { echo "装完了但没有 sm64coopdx.exe"; exit 1; }
           test -f "$target/unins000.exe"    || { echo "装完了但没有卸载程序"; exit 1; }
           test -d "$target/dynos"           || { echo "装完了但没有 dynos 目录（[Files] 递归没生效）"; exit 1; }
@@ -337,8 +364,9 @@ jobs:
             sleep 1; i=$((i + 1))
           done
           [ -f "$target/sm64coopdx.exe" ] && { echo "卸载后主程序还在"; exit 1; }
+          trap - EXIT
           echo "安装 / 卸载都正常"
-          rm -rf "$target" || true
+          rm -rf "$target" "$log" || true
 
       - name: 上传安装向导（setup.exe）
         uses: actions/upload-artifact@v4

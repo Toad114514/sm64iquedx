@@ -679,6 +679,51 @@ else
     no "awk 正则里出现「方括号包斜杠」（macOS 的 awk 会当正则提前结束）：$awkhit"
 fi
 
+# D3: workflow 里调原生 Windows 程序（setup.exe / unins000.exe / ISCC）时，必须
+# 先 `MSYS2_ARG_CONV_EXCL='*'`。那个 job 的默认 shell 是 msys2，它会把「/ 开头」
+# 的 argv 当成 POSIX 路径改写：/VERYSILENT → C:/msys64/VERYSILENT。Inno 认不出
+# 这些开关就当没传，**弹出图形向导等人工点下一步**；无头 runner 上没人可点，
+# 于是一路挂到 job 超时（首次上线的 run 43164325739：编译 8 分 32 秒，冒烟步骤
+# 挂了 5 小时 49 分，最后被 6 小时上限杀掉）。这条只能静态守 —— 本地没有 Windows。
+#
+# 判据分两半：① 带 Inno 静默开关的步骤里，注释之外必须有 MSYS2_ARG_CONV_EXCL；
+# ② 该步骤还得有 timeout-minutes，免得将来别的「等输入」挂起又白烧整个 job。
+wf="$repo/.github/workflows/build.yml"
+if [ ! -f "$wf" ]; then
+    no "找不到 ${wf}，无法检查冒烟测试步骤"
+else
+    # 只看非注释行：注释里为了说明问题会写到 /VERYSILENT
+    naming=$(LC_ALL=C awk '
+        function close_step() {
+            if (name != "" && hit && !excl) printf "%s\n", name
+            name = ""
+        }
+        /^      - (name|uses):/ { close_step()
+            name = $0; sub(/^ *- *(name|uses): */, "", name)
+            hit = 0; excl = 0; next }
+        /^[ \t]*#/ { next }
+        /(\/VERYSILENT|\/SUPPRESSMSGBOXES|\/NORESTART|\/DIR=|\/LOG=)/ { hit = 1 }
+        /MSYS2_ARG_CONV_EXCL/ { excl = 1 }
+        END { close_step() }' "$wf")
+    if [ -z "$naming" ]; then
+        ok "workflow：调 setup.exe 的步骤都关掉了 MSYS2 的 /VERYSILENT 路径改写"
+    else
+        no "workflow：这些步骤调了 setup.exe 但没设 MSYS2_ARG_CONV_EXCL（参数会被改写成路径，"
+        printf '        installer 会退化成图形向导并永久挂起）：%s\n' "$(printf '%s' "$naming" | tr '\n' ' ')"
+    fi
+
+    if grep -q '^      - name: 冒烟测试安装向导' "$wf"; then
+        if sed -n '/^      - name: 冒烟测试安装向导/,/^      - name:/p' "$wf" \
+                | grep -q '^        timeout-minutes:'; then
+            ok "workflow：冒烟测试步骤带 timeout-minutes（挂起时快速失败）"
+        else
+            no "workflow：冒烟测试步骤没有 timeout-minutes（挂起会吃满 6 小时 job 上限）"
+        fi
+    else
+        no "workflow：找不到冒烟测试步骤（改名了？这条检查要跟着改）"
+    fi
+fi
+
 say_section "结果"
 printf '  通过 %d，失败 %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
