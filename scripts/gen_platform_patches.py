@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
-"""Generate the single shared Android platform patch.  It lives flat in patches/.
+"""Generate the single shared Android platform patch, patches/0008-android.patch.
 
-Four upstreams share one main patch set, also flat in patches/::
+Four upstreams share one main patch set, flat under patches/ -- the four-digit
+number in the file name is the apply order::
 
-    0001-src-overlay.patch        required, shared (no lang/*.ini in it)
-    0002-djui-frontend.patch      optional, shared (DJUI toggle)
-    0005-android.patch            platform delta, shared by android + android-cn
+    0001-build-and-config.patch   build switch (Makefile, configfile)
+    0002-rom-assets.patch         iQue rom detection / asset loading
+    0003-text-core.patch          encoding + glyph core, HUD and title text
+    0004-dialog.patch             dialog tables and rendering
+    0005-menus.patch              file select, star select, title intro
+    0006-asset-overlay.patch      iQue texture/geometry overlays
+    0007-djui-frontend.patch      optional (DJUI toggle), only with --frontend
+    0008-android.patch            platform delta, shared by android + android-cn
     cn_extra/                     new files, copied verbatim
 
 ``lang/*.ini`` is not patched at all.  Every upstream has its own ini with
@@ -16,9 +22,9 @@ needed strings are inserted at apply time by ``scripts/add_lang_strings.sh``
 
 Only two kinds of differences remain for the platform patch:
 
-1. Two files drifted away from the PC baseline, so 0001 has to be applied with
-   ``--exclude=...`` on Android.  The platform patch supplies their correct
-   final state instead (computed by three-way merge):
+1. Two files drifted away from the PC baseline, so 01-build / 02-rom have to be
+   applied with ``--exclude=...`` on Android.  The platform patch supplies their
+   correct final state instead (computed by three-way merge):
 
        Makefile               PC build script (ndk-build never reads it)
        src/pc/pc_main.c       Android uses SDL_main / TARGET_ANDROID branches
@@ -28,7 +34,7 @@ Only two kinds of differences remain for the platform patch:
    ``LOCAL_CFLAGS`` or every ``#if defined(SM64COOPDX_CN_TEXT)`` block is
    compiled out and the Chinese pack silently does nothing on Android.
 
-``src/pc/configfile.c`` is excluded from 0001 too, but it does NOT get a patch:
+``src/pc/configfile.c`` is excluded on Android too, but it does NOT get a patch:
 the two Android forks insert their TOUCH_CONTROLS block at exactly the spot the
 PC patch also inserts code, so the only difference between the two per-fork
 patches used to be the surrounding context (``configSnapTouch`` vs
@@ -48,7 +54,7 @@ Usage::
         --android    /path/to/ManIsCat2-sm64coopdx \
         --android-cn /path/to/sm64coopdx-Chinese-Android
 
-Run ``scripts/gen_all_patches.sh`` first so the shared 0001/0002 are current.
+Run ``scripts/gen_all_patches.sh`` first so 0001~0007 are current.
 """
 
 import argparse
@@ -59,21 +65,36 @@ import tempfile
 from pathlib import Path
 
 FRONTEND = "src/pc/djui/djui_panel_misc.c"
+# 0007-djui-frontend 里的全部文件；verify B 用它们证明「不应用也编译得过、文件没被动过」。
+FRONTEND_FILES = (
+    FRONTEND,
+    "src/pc/djui/djui_panel_confirm.c",
+    "src/pc/djui/djui_panel_confirm.h",
+)
 ANDROID_MK = "Android.mk"
 CONFIGFILE = "src/pc/configfile.c"
 EN_INI = "lang/English.ini"
 CN_INI = "lang/Chinese.ini"
 
-MAIN_PATCH = "0001-src-overlay.patch"
-FRONTEND_PATCH = "0002-djui-frontend.patch"
+# 共用补丁：文件名里的四位编号即应用顺序（0001 … 0006）。0008-android 由本脚本
+# 生成，0007-djui-frontend 是可选的。
+CORE_PATCH_GLOBS = (
+    "0001-*.patch",
+    "0002-*.patch",
+    "0003-*.patch",
+    "0004-*.patch",
+    "0005-*.patch",
+    "0006-*.patch",
+)
+FRONTEND_PATCH = "0007-djui-frontend.patch"
 # 一份平台补丁，两个 Android 上游共用。两边的 Makefile / pc_main.c / Android.mk
 # 内容完全相同，所以 hunk 也完全相同；生成时会逐字节比对，一旦哪天漂开就直接
 # 报错，而不是静默产出一份只对其中一个上游有效的补丁。
-ANDROID_PATCH = "0005-android.patch"
+ANDROID_PATCH = "0008-android.patch"
 
-# Files 0001 must skip on Android.  lang/*.ini is NOT here: 0001 never contains
-# it, so the applier does not need to exclude it.  Keep this list in sync with
-# scripts/apply_patches.sh; the script asserts both ends.
+# Files 0001~0006 must skip on Android.  lang/*.ini is NOT here: no group
+# ever contains it, so the applier does not need to exclude it.  Keep this list
+# in sync with scripts/apply_patches.sh; the script asserts both ends.
 #
 # CONFIGFILE is excluded but is not covered by the patch -- its lines come from
 # scripts/add_cn_config.sh.  The other two are the patch's job.
@@ -264,14 +285,32 @@ def compute(name, upstream, pc_base, src_root):
     return final, parts
 
 
+def core_patches(repo: Path):
+    """0001 … 0006 的补丁，编号即应用顺序。"""
+    out = []
+    for pat in CORE_PATCH_GLOBS:
+        got = sorted((repo / "patches").glob(pat))
+        if not got:
+            raise SystemExit(f"缺少 patches/{pat}，先跑 scripts/gen_all_patches.sh")
+        out.extend(got)
+    return out
+
+
+def apply_core(tree: Path, repo: Path, excludes=()) -> None:
+    for p in core_patches(repo):
+        if p.stat().st_size == 0:
+            continue
+        apply(tree, p, excludes)
+
+
 def verify(name, upstream, final, patch, repo, lang_present):
     # 语言文件与 configfile.c 也要复制进校验树，否则脚本无处可插。
-    files = sorted(set(final) | {FRONTEND} | set(lang_present))
+    files = sorted(set(final) | set(FRONTEND_FILES) | set(lang_present))
 
-    # --- verify A: 完整链路 0001(excluded) + 平台补丁 + 0002 + 两个插入脚本 ---
+    # --- verify A: 完整链路 0001~0006(excluded) + 平台补丁 + 0007 + 两个插入脚本 ---
     check = _tmp / f"{name}-check"
     pristine_copy(upstream, check, files)
-    apply(check, repo / "patches" / MAIN_PATCH, EXCLUDED)
+    apply_core(check, repo, EXCLUDED)
     apply(check, patch)
     apply(check, repo / "patches" / FRONTEND_PATCH)
     run_script(repo, CONFIG_SCRIPT, check)
@@ -280,7 +319,7 @@ def verify(name, upstream, final, patch, repo, lang_present):
         if read(check / rel) != want:
             raise SystemExit(f"{name}: 应用后 {rel} 与三方合并终态不一致")
     check_lang_strings(name, check)
-    print(f"  ✅ 0001(--exclude {len(EXCLUDED)}) + {patch.name} + 0002 + "
+    print(f"  ✅ 0001~0006(--exclude {len(EXCLUDED)}) + {patch.name} + 0007-djui-frontend + "
           f"add_cn_config.sh + add_lang_strings.sh == 终态（{len(final)} 文件逐字节）")
 
     # --- verify A2: 两个插入脚本幂等 ---
@@ -290,19 +329,21 @@ def verify(name, upstream, final, patch, repo, lang_present):
         raise SystemExit(f"{name}: add_cn_config.sh 复跑不幂等")
     print("  ✅ 两个插入脚本复跑无改动（幂等）")
 
-    # --- verify B: 0002 真的是可选的 ---
+    # --- verify B: 0007-djui-frontend 真的是可选的 ---
     nofrontend = _tmp / f"{name}-nofrontend"
     pristine_copy(upstream, nofrontend, files)
-    apply(nofrontend, repo / "patches" / MAIN_PATCH, EXCLUDED)
+    apply_core(nofrontend, repo, EXCLUDED)
     apply(nofrontend, patch)
     run_script(repo, CONFIG_SCRIPT, nofrontend)
     run_script(repo, LANG_SCRIPT, nofrontend)
-    if read(nofrontend / FRONTEND) != read(upstream / FRONTEND):
-        raise SystemExit(f"{name}: 不应用 0002 时前端文件被意外修改")
+    for rel in FRONTEND_FILES:
+        if read(nofrontend / rel) != read(upstream / rel):
+            raise SystemExit(f"{name}: 不应用 0007-djui-frontend 时 {rel} 被意外修改")
     for rel, want in final.items():
-        if rel != FRONTEND and read(nofrontend / rel) != want:
-            raise SystemExit(f"{name}: 不应用 0002 时 {rel} 未达到终态")
-    print(f"  ✅ 不应用 0002 时 {FRONTEND} 保持上游原版")
+        if rel not in FRONTEND_FILES and read(nofrontend / rel) != want:
+            raise SystemExit(f"{name}: 不应用 0007-djui-frontend 时 {rel} 未达到终态")
+    print(f"  ✅ 不应用 0007-djui-frontend 时 {len(FRONTEND_FILES)} 个前端文件保持上游原版")
+
 
     # --- verify C: 排除项是否已经不再需要（仅提示，不自动收缩） ---
     pristine = _tmp / f"{name}-pristine"
@@ -333,9 +374,12 @@ def main():
     pc_base = Path(a.pc_base).resolve()
     if not src_root.is_dir() or not pc_base.is_dir():
         raise SystemExit("src/ 或 --pc-base 不存在")
-    for patch in (MAIN_PATCH, FRONTEND_PATCH):
-        if not (repo / "patches" / patch).exists():
-            raise SystemExit(f"缺少共用补丁 patches/{patch}，先跑 scripts/gen_all_patches.sh")
+    for patch in core_patches(repo) + [repo / "patches" / FRONTEND_PATCH]:
+        if not patch.exists():
+            raise SystemExit(f"缺少共用补丁 {patch.relative_to(repo)}，"
+                             "先跑 scripts/gen_all_patches.sh")
+        if patch.stat().st_size == 0:
+            raise SystemExit(f"共用补丁 {patch.relative_to(repo)} 是空的")
     for script in (LANG_SCRIPT, CONFIG_SCRIPT):
         if not (repo / script).exists():
             raise SystemExit(f"缺少 {script}")
@@ -352,22 +396,23 @@ def main():
             f"  生成脚本: {sorted(EXCLUDED)}\n"
             f"  应用脚本: {sorted(listed)}"
         )
-    if "--frontend" not in applier and FRONTEND_PATCH not in applier:
-        raise SystemExit("scripts/apply_patches.sh 没有接线 0002")
+    if "--frontend" not in applier or "0007-djui-frontend.patch" not in applier:
+        raise SystemExit("scripts/apply_patches.sh 没有接线 0007-djui-frontend.patch")
     if CONFIG_SCRIPT.split("/")[-1] not in applier:
         raise SystemExit(f"scripts/apply_patches.sh 没有接线 {CONFIG_SCRIPT}")
 
-    # 主补丁里不应再出现 lang/*.ini，也不应出现任何平台补丁覆盖的文件。
-    main = repo / "patches" / MAIN_PATCH
-    main_files = {line[6:] for line in read(main).splitlines() if line.startswith("--- a/")}
-    if set(main_files) & set(LANG_FILES):
-        raise SystemExit("0001 仍含 lang/*.ini，先重跑 scripts/gen_all_patches.sh")
-    # 平台补丁覆盖的文件本来就在 0001 里（正因为 0001 打不上才需要平台补丁），
+    # 共用分组补丁里不应出现 lang/*.ini，也不应出现任何平台补丁覆盖的文件。
+    core_files = set()
+    for p in core_patches(repo):
+        core_files |= {line[6:] for line in read(p).splitlines() if line.startswith("--- a/")}
+    if core_files & set(LANG_FILES):
+        raise SystemExit("0001~0006 里仍含 lang/*.ini，先重跑 scripts/gen_all_patches.sh")
+    # 平台补丁覆盖的文件本来就在共用组里（正因为打不上才需要平台补丁），
     # 所以这里只检查「没被 --exclude 掉却出现在平台补丁里」。
-    overlap = (set(main_files) & set(PLATFORM_FILES)) - set(EXCLUDED)
+    overlap = (core_files & set(PLATFORM_FILES)) - set(EXCLUDED)
     if overlap:
-        raise SystemExit(f"0001 与平台补丁重复: {sorted(overlap)}")
-    if FRONTEND in PLATFORM_FILES or set(PLATFORM_FILES) & set(LANG_FILES):
+        raise SystemExit(f"0001~0006 与平台补丁重复: {sorted(overlap)}")
+    if set(FRONTEND_FILES) & set(PLATFORM_FILES) or set(PLATFORM_FILES) & set(LANG_FILES):
         raise SystemExit("平台补丁不应包含前端或 lang/*.ini")
 
     targets = (
@@ -403,15 +448,19 @@ def main():
         print(f"\n{ANDROID_PATCH}: {len(diffs)} 个文件 — {', '.join(sorted(diffs))}"
               f"（两个上游共用一份）")
 
-        stale = repo / "patches" / "0006-android-cn.patch"
-        if stale.exists():
-            raise SystemExit(f"旧的 {stale.name} 还在，删掉它（已经并进 {ANDROID_PATCH}）")
+        stale = (repo / "patches" / "0006-android-cn.patch",
+                 repo / "patches" / "0005-android.patch",
+                 repo / "patches" / "0001-src-overlay.patch",
+                 repo / "patches" / "0002-djui-frontend.patch")
+        for old in stale:
+            if old.exists():
+                raise SystemExit(f"旧的 {old.name} 还在，删掉它（补丁已平铺成 编号-分组-职责.patch）")
 
         for name, upstream in targets:
             print(f"\n===== 校验 {name} =====")
             verify(name, upstream, results[name][1], patch, repo, langs[name])
 
-    print("\n完成。共用 0001/0002 与 cn_extra 未改动；"
+    print("\n完成。共用 0001~0007 与 cn_extra 未改动；"
           f"{ANDROID_PATCH} 由两个 Android 目标共用，语言字符串与配置项由 "
           "scripts/add_lang_strings.sh / scripts/add_cn_config.sh 插入。")
 

@@ -58,7 +58,7 @@ sh ./install.sh -a -c                     # 只构建 Android 汉化版 APK
 | --- | --- |
 | `-a, --android` | 只构建 Android APK（需要 NDK + Gradle），优先级高于 `--package` |
 | `-c, --chinese` | 使用 `上善若&梅塔的长名字` 制作的汉化版上游仓库 `sm64coopdx-Chinese` 或 `sm64coopdx-Chinese-Android` |
-| `-f, --frontend` | 应用 `patches/0002-djui-frontend.patch`，在 设置 → 其他 里添加简易开关；不应用时只能改配置文件 |
+| `-f, --frontend` | 应用 `patches/0007-djui-frontend.patch`，在 设置 → 其他 里添加简易开关；不应用时只能改配置文件 |
 | `-d, --djmd` | 应用 [djui_modern](https://github.com/Shangshanruo666/djui_modern) 模块。**只能与 `-c` 搭配使用** |
 | `-p, --package <方式>` | 将 dist/ 内容打包成软件包或 portable 压缩包 |
 

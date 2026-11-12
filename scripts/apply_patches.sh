@@ -1,18 +1,32 @@
 #!/bin/sh
-# 把补丁叠加到一份干净的上游 checkout 上。所有补丁都平铺在 patches/ 根目录。
+# 把补丁叠加到一份干净的上游 checkout 上。
 #
-#   scripts/apply_patches.sh <pc|android|android-cn> <上游根目录> [--frontend]
+# 补丁全部平铺在 patches/ 下，文件名 = 四位编号 + 分组 + 职责，**编号就是应用
+# 顺序**（`sort` 即顺序）：
 #
-# 四套上游共用 0001 / 0002 / cn_extra/；两个 Android 目标共用 0005 平台补丁。
+#   patches/0001-build-and-config.patch   构建开关（Makefile / configfile）
+#   patches/0002-rom-assets.patch         神游 ROM 探测与资源读取
+#   patches/0003-text-core.patch          编码/字形核心、HUD 与标题文本
+#   patches/0004-dialog.patch             对话框表与渲染
+#   patches/0005-menus.patch              文件选择、选星盘、标题过场
+#   patches/0006-asset-overlay.patch      iQue 贴图/几何覆盖
+#   patches/0007-djui-frontend.patch      可选前端（--frontend 才应用）
+#   patches/0008-android.patch            Android 平台增量（仅 android / android-cn）
+#   patches/cn_extra/                     上游不存在的新增文件，直接拷贝
 #
-# lang/*.ini 的改动既不在 0001 里、也不做成补丁：各上游的 ini 行号与自带条目
+# 分组只体现在文件名里：可选组靠前缀 glob 区分（0007-* / 0008-*），不给可选的
+# 补丁再套一层目录。
+#
+# 四套上游共用 0001~0006；0007 可选；0008 由两个 Android 目标共用。
+#
+# lang/*.ini 的改动既不在任何补丁里、也不做成补丁：各上游的 ini 行号与自带条目
 # 都不同，做成补丁每个上游一份，量太大也不好维护。改由
 # scripts/add_lang_strings.sh 按键插入（已存在则跳过），四套上游共用一份。
 # src/pc/configfile.c 的中文配置项同理，由 scripts/add_cn_config.sh 插入。
 #
-# 0001 在 Android 上跳过 3 个上下文漂移文件（该列表必须与
+# Android 上 0001-build / 0002-rom 里各有文件要跳过（该列表必须与
 # scripts/gen_platform_patches.py 的 EXCLUDED 一致，生成脚本会做一致性断言）。
-# 其中 Makefile / pc_main.c 由 0005 直接给出终态，configfile.c 由插入脚本补。
+# 其中 Makefile / pc_main.c 由 0008-android 直接给出终态，configfile.c 由插入脚本补。
 #
 # 重复执行是安全的：已应用的补丁与已存在的字符串都会被识别并跳过。
 set -eu
@@ -25,7 +39,7 @@ usage() {
               （Shangshanruo 的 PC 汉化版也用这个目标）
   android     ManIsCat2/sm64coopdx
   android-cn  Shangshanruo666/sm64coopdx-Chinese-Android
-  --frontend  额外应用 0002，在「设置 → 其他」里显示中文字库开关
+  --frontend  额外应用 0007-djui-frontend.patch，在「设置 → 其他」里显示中文字库开关
 
 上游根目录必须是 upstream.txt 声明的 commit 的干净 checkout。
 EOF
@@ -47,11 +61,10 @@ done
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 P="$root/patches"
-MAIN="$P/0001-src-overlay.patch"
-FRONT="$P/0002-djui-frontend.patch"
+FRONT_PATCH="$P/0007-djui-frontend.patch"
+PLAT_PATCH="$P/0008-android.patch"
 # 两个 Android 上游共用同一份平台补丁：它们的 Makefile / pc_main.c / Android.mk
 # 内容完全相同，以前每目标一份只是上下文漂移（configSnapTouch vs configElementSnap）。
-PLAT_ANDROID="$P/0005-android.patch"
 
 platform=""
 case "$target" in
@@ -59,14 +72,14 @@ case "$target" in
         set --
         ;;
     android)
-        platform="$PLAT_ANDROID"
+        platform="$PLAT_PATCH"
         set -- \
             --exclude=Makefile \
             --exclude=src/pc/configfile.c \
             --exclude=src/pc/pc_main.c
         ;;
     android-cn)
-        platform="$PLAT_ANDROID"
+        platform="$PLAT_PATCH"
         set -- \
             --exclude=Makefile \
             --exclude=src/pc/configfile.c \
@@ -75,11 +88,46 @@ case "$target" in
     *) echo "未知目标: $target" >&2; usage ;;
 esac
 
-for f in "$MAIN" "$FRONT" "$P/cn_extra"; do
-    [ -e "$f" ] || { echo "缺少 $f" >&2; exit 1; }
+core_count=0
+for f in "$P"/000[1-6]-*.patch; do
+    [ -e "$f" ] && core_count=$((core_count + 1))
 done
-if [ -n "$platform" ] && [ ! -f "$platform" ]; then
-    echo "缺少 ${platform}，先跑 gen_platform_patches.py" >&2
+[ "$core_count" -gt 0 ] || {
+    echo "缺少 patches/000[1-6]-*.patch，先跑 scripts/gen_all_patches.sh" >&2
+    exit 1
+}
+[ -d "$P/cn_extra" ] || { echo "缺少 patches/cn_extra/" >&2; exit 1; }
+
+# 补丁已改成平铺在 patches/ 下。两种情况都要拦，因为它们会让同一处改动被应用
+# 两次（症状是 hunk 冲突）或者读到一份没人更新的旧副本：
+#   * 残留的旧分组目录 01-build/ … 08-platform/；
+#   * 文件名不是「编号-分组」的平铺补丁（拆分前的 0001-src-overlay.patch 等）。
+olddirs=$(ls -d "$P"/0[1-8]-*/ 2>/dev/null || true)
+if [ -n "$olddirs" ]; then
+    echo "错误: patches/ 下还有旧的按目录分组，补丁已改成平铺（编号-分组-职责.patch）：" >&2
+    printf '%s\n' "$olddirs" | sed 's/^/  /' >&2
+    exit 1
+fi
+stray=""
+for f in "$P"/*.patch; do
+    [ -e "$f" ] || continue
+    case "$(basename "$f")" in
+        000[1-8]-*) ;;
+        *) stray="$stray
+  $f" ;;
+    esac
+done
+if [ -n "$stray" ]; then
+    echo "错误: 这些补丁的文件名不是「四位编号-分组-职责.patch」：" >&2
+    printf '%s\n' "$stray" >&2
+    exit 1
+fi
+if [ -n "$platform" ] && [ ! -f "$PLAT_PATCH" ]; then
+    echo "缺少 ${PLAT_PATCH#"$P"/}，先跑 gen_platform_patches.py" >&2
+    exit 1
+fi
+if [ "$frontend" = yes ] && [ ! -f "$FRONT_PATCH" ]; then
+    echo "缺少 ${FRONT_PATCH#"$P"/}，先跑 gen_all_patches.sh" >&2
     exit 1
 fi
 
@@ -103,12 +151,16 @@ apply_patch() {
 }
 
 echo "目标: $target  上游: $upstream"
-apply_patch "$MAIN" "$@"
+# 文件名编号是全局的，glob 排序即应用顺序（0001 → 0008）。
+for patch in "$P"/000[1-6]-*.patch; do
+    [ -e "$patch" ] || continue
+    apply_patch "$patch" "$@"
+done
 if [ -n "$platform" ]; then
     apply_patch "$platform"
 fi
 if [ "$frontend" = yes ]; then
-    apply_patch "$FRONT"
+    apply_patch "$FRONT_PATCH"
 fi
 
 # cn_extra/ 的语义是「上游不存在的新增文件」，所以只补缺、不覆盖：
@@ -127,8 +179,8 @@ copy_extras() {
 
 copy_extras
 
-# configfile.c 的中文配置项：0001 因为上下文漂移被 --exclude 掉了，这里补上。
-# （PC 目标不用管，0001 已经直接把它改好了）
+# configfile.c 的中文配置项：Android 上 01-build 因为上下文漂移被 --exclude
+# 掉了，这里补上。（PC 目标不用管，01-build 已经直接把它改好了）
 if [ "$target" != pc ]; then
     echo "配置项:"
     sh "$root/scripts/add_cn_config.sh" "$upstream"

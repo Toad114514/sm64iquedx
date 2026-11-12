@@ -20,7 +20,7 @@ cd "$repo"
 # ── 默认值 ────────────────────────────────────────────────────────────────────
 ASK_ANDROID=no          # yes = 只构建 Android APK，不构建桌面版
 ASK_CHINESE=no          # yes = 用汉化版上游（PC: cn-repo / Android: android-cn-repo）
-ASK_FRONTEND=no         # yes = 额外应用 0002（设置 → 其他 里的中文字库开关）
+ASK_FRONTEND=no         # yes = 额外应用 0007-djui-frontend.patch（设置 → 其他 里的中文字库开关）
 ASK_DJUI=no             # yes = 应用 djui_modern 模块
 ASK_PACKAGE=            # 空/auto/deb/rpm/arch/mac/setup/zip/other/no
 WORK_DIR="$repo/build-iquedx"   # 上游 checkout 与中间文件（.gitignore 的 build-*/）
@@ -73,8 +73,8 @@ usage() {
   -a, --android          只构建 Android APK（需要 Android NDK + Gradle），
                          此模式下不做任何桌面打包
   -c, --chinese          使用汉化版上游（PC 用 cn-repo，Android 用 android-cn-repo）
-  -f, --frontend         额外应用 0002 前端补丁：设置 → 其他 → 神游汉化
-  -d, --djmd             应用 djui_modern 模块（在打 0001 之前）
+  -f, --frontend         额外应用 0007-djui-frontend.patch 前端补丁：设置 → 其他 → 神游汉化
+  -d, --djmd             应用 djui_modern 模块（在打 0001~0006 之前）
                          必须同时给 -c：该模块硬依赖汉化上游自带的
                          src/pc/djui/cn_glyphs.h，原版上游里没有这个文件
 
@@ -893,7 +893,7 @@ clone_at "$UP_URL" "$UP_COMMIT" "$UPSTREAM_DIR"
 step "2/6 检查目录结构"
 check_structure "$UPSTREAM_DIR"
 
-# ── 3. djui_modern（必须在 0001 之前）────────────────────────────────────────
+# ── 3. djui_modern（必须在 0001~0006 之前）──────────────────────────────────────
 if [ "$ASK_DJUI" = yes ]; then
     step "3/6 djui_modern"
     apply_djui_modern "$UPSTREAM_DIR" "$ASK_ANDROID"
@@ -904,7 +904,7 @@ fi
 
 # ── 4. 本体补丁 ──────────────────────────────────────────────────────────────
 # 顺序与幂等性都由 apply_patches.sh 固化：
-#   0001 → 平台增量(0005) → [0002] → cn_extra 补缺 → 配置项/语言字符串
+#   0001~0006 → 平台增量(0008) → [0007 前端] → cn_extra 补缺 → 配置项/语言字符串
 step "4/6 应用补丁"
 if [ "$ASK_FRONTEND" = yes ]; then
     sh "$repo/scripts/apply_patches.sh" "$TARGET" "$UPSTREAM_DIR" --frontend

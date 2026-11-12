@@ -1,28 +1,30 @@
 #!/bin/sh
 # 由 src/ 对上游基线生成补丁。
 #
-#   scripts/gen_patches.sh <上游根目录> [输出文件] [--only 前缀] [--exclude 前缀]
+#   scripts/gen_patches.sh <上游根目录> <输出文件> [--only 前缀] [--exclude 前缀]
 #
 # 上游根目录 = 与 upstream.txt 声明的 commit 一致的干净 checkout。
-# 默认输出 patches/0001-src-overlay.patch，可被 `git apply -p1` / `patch -p1` 应用。
+# 输出文件必须显式给出（补丁平铺在 patches/ 下，文件名是「四位编号-分组-职责.patch」，
+# 没有合理的默认值）。产物可被 `git apply -p1` / `patch -p1` 应用。
 # --only / --exclude 按相对路径前缀筛选，可各重复多次（取并集），
-# 用于把前端、语言字符串等独立改动拆成各自的补丁。
+# 用于把改动按职责拆成各自的补丁；日常请直接跑 gen_all_patches.sh。
 set -eu
 
 if [ $# -lt 1 ]; then
-    sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'
     exit 1
 fi
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 upstream=$(cd "$1" && pwd)
 shift
-if [ $# -gt 0 ] && [ "${1#--}" = "$1" ]; then
-    out=$1
-    shift
-else
-    out=patches/0001-src-overlay.patch
+# 输出文件必须显式给出：拆成分组补丁后没有「默认那一个」可写。
+if [ $# -lt 1 ] || [ "${1#--}" != "$1" ]; then
+    echo "错误: 需要显式的输出文件路径（第二个参数），见脚本头部用法" >&2
+    exit 2
 fi
+out=$1
+shift
 
 # 前缀列表用空格分隔（仓库内路径不含空格），可重复给 --only / --exclude。
 only=""

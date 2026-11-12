@@ -106,7 +106,7 @@ body:
     id: frontend-patch
     attributes:
       label: 是否启用配置前端补丁
-      description: 即 `0002-djui-frontend.patch`（设置 → 其他 里的「中文字库」复选框）
+      description: 即 `patches/0007-djui-frontend.patch`（设置 → 其他 里的「中文字库」复选框）
       options:
         - 已启用（带 --frontend）
         - 未启用
