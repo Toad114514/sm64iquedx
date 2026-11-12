@@ -40,6 +40,18 @@ void cn_tex_apply(bool active);
 // not have. Returns 0 when the pack is off, i.e. the US layout.
 s32 cn_tex_gauge_dy(void);
 
+// The same offset, expressed for a HUD texture draw: pass the texture and the
+// height scale you are about to draw it at, and get back the amount to add to
+// `y`. Returns 0 for every texture that is not one of the gauge wedges, and 0
+// when the pack is off.
+//
+// This is what djui_hud_render_texture() applies, so a mod that rebuilds the
+// widget by hand out of `texture_power_meter_*` lands in the right place
+// without knowing anything about iQue. Applying it inside the binding rather
+// than at each call site is the point: the set of callers is "every mod ever
+// written", and it grows after we ship.
+f32 cn_tex_gauge_texture_dy(const void *texture, f32 texelScale);
+
 // Called at the end of rom_assets_load(). The asset arrays have just been
 // refilled from the US rom, so any earlier backup is stale and must be retaken
 // before the overlay is re-applied. Without this, a second rom load would

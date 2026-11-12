@@ -77,6 +77,35 @@ extern u8 title_texture_0A005940[];
 // the only geometry iQue moved in the whole segment.
 extern Vtx vertex_power_meter_health_segments[];
 
+// The eight wedge textures the gauge is drawn with. Needed by identity, not for
+// their pixels: cn_tex_gauge_texture_dy() recognises "this quad is the gauge"
+// by comparing against these addresses, so that HUD drawing done outside the
+// vanilla display list gets the same four-texel correction the vertices carry.
+extern u8 texture_power_meter_one_segments[];
+extern u8 texture_power_meter_two_segments[];
+extern u8 texture_power_meter_three_segments[];
+extern u8 texture_power_meter_four_segments[];
+extern u8 texture_power_meter_five_segments[];
+extern u8 texture_power_meter_six_segments[];
+extern u8 texture_power_meter_seven_segments[];
+extern u8 texture_power_meter_full[];
+
+// Deliberately only the wedges. The socket halves (left/right side) are *not*
+// in here: iQue left them exactly where US did -- only the disc inside them
+// moved -- so offsetting them would drag the whole widget down.
+static u8 *const sGaugeTextures[] = {
+    texture_power_meter_one_segments,
+    texture_power_meter_two_segments,
+    texture_power_meter_three_segments,
+    texture_power_meter_four_segments,
+    texture_power_meter_five_segments,
+    texture_power_meter_six_segments,
+    texture_power_meter_seven_segments,
+    texture_power_meter_full,
+};
+
+#define CN_GAUGE_TEXTURE_COUNT ((u32)(sizeof(sGaugeTextures) / sizeof(sGaugeTextures[0])))
+
 struct CnTexSlot {
     u8 *target;          // the vanilla array rom_assets_load() filled
     u32 tex;             // index into the runtime iQue texture set
@@ -122,6 +151,17 @@ static u8 sUsBackup[CN_TEX_BACKUP_SIZE];
 static u32 sBackupOffset[CN_TEX_SLOT_COUNT];
 static bool sBackedUp = false;
 
+// The gauge quad's Y as it came out of the player's rom -- *not* "the US
+// values". They are the same thing only when the game itself runs on a US
+// dump. coopdx also accepts an iQue dump as the game rom, and then the loaded
+// artwork is already localised and the loaded quad already sits at iQue's
+// height; writing the US constants back would drag the gauge up four texels
+// out of the artwork it is drawn into, which reads as a shadow appearing
+// under the wheel. Same reasoning as the texture backup above: the thing to
+// restore is what was loaded, not what the other rom happens to contain.
+static f32 sGaugeYRom[CN_POW_METER_GAUGE_VTX_COUNT];
+static bool sGaugeCaptured = false;
+
 static void cn_tex_capture_backup(void) {
     u32 i, offset = 0;
 
@@ -134,30 +174,62 @@ static void cn_tex_capture_backup(void) {
     for (i = 0; i < CN_TEX_SLOT_COUNT; i++) {
         memcpy(&sUsBackup[sBackupOffset[i]], sSlots[i].target, sSlots[i].size);
     }
+
+    // Captured here rather than in cn_tex_on_rom_loaded() alone so the gauge
+    // and the pixels are always snapshotted by the same call: a rom reload
+    // invalidates both, and splitting them is how one ends up a load behind.
+    for (i = 0; i < CN_POW_METER_GAUGE_VTX_COUNT; i++) {
+        sGaugeYRom[i] = vertex_power_meter_health_segments[i].v.ob[1];
+    }
+    sGaugeCaptured = true;
+
     sBackedUp = true;
 }
 
 // Move the health gauge to where iQue drew it.
 //
-// No backup is needed for this one: unlike the textures, whose US pixels have
-// to be read out of the loaded asset, both scripts are compile-time constants
-// taken from the two roms (see cn_tex_overrides.h), so writing the US values
-// back *is* restoring the rom's own data.
+// The artwork and this quad are one unit (see cn_tex_overrides.h): iQue moved
+// both down so the taller 「能量」 glyphs clear the cloud. Overlaying one
+// without the other leaves the gauge four texels high in its socket and the
+// socket's dark rim shows round the bottom of the wheel.
 static void cn_tex_apply_gauge(bool active) {
     u32 i;
 
     for (i = 0; i < CN_POW_METER_GAUGE_VTX_COUNT; i++) {
         vertex_power_meter_health_segments[i].v.ob[1] =
-            active ? sCnPowMeterGaugeY_cn[i] : sCnPowMeterGaugeY_us[i];
+            active ? (f32) sCnPowMeterGaugeY_cn[i] : sGaugeYRom[i];
     }
 }
 
 s32 cn_tex_gauge_dy(void) {
-    if (!gCnTextPackActive) { return 0; }
+    if (!sGaugeCaptured) { return 0; }
+    // How far the quad currently sits from the US layout, read off the quad
+    // itself rather than recomputed from the switch. The DJUI path
+    // (hud_render_power_meter) rebuilds the widget from fixed US offsets, so it
+    // needs exactly this number -- and taking it from the vertices means the
+    // two render paths can never disagree about where the gauge is drawn.
+    //
     // Vertex y grows upwards: the HUD ortho matrix is guOrtho(0, SCREEN_WIDTH,
-    // 0, SCREEN_HEIGHT), so a smaller ob[1] is *lower* on screen. iQue's quad
-    // therefore sits (us - cn) texels lower than the US one.
-    return sCnPowMeterGaugeY_us[0] - sCnPowMeterGaugeY_cn[0];
+    // 0, SCREEN_HEIGHT), so a smaller ob[1] is *lower* on screen.
+    return (s32) (sCnPowMeterGaugeY_us[0] - vertex_power_meter_health_segments[0].v.ob[1]);
+}
+
+f32 cn_tex_gauge_texture_dy(const void *texture, f32 texelScale) {
+    u32 i;
+
+    if (!sGaugeCaptured || texture == NULL) { return 0.0f; }
+
+    for (i = 0; i < CN_GAUGE_TEXTURE_COUNT; i++) {
+        if (texture == (const void *) sGaugeTextures[i]) {
+            // texelScale is "HUD pixels per texel of this texture", i.e. exactly
+            // what the caller passed as the height scale for a 32x32 wedge. The
+            // offset therefore comes out in the same unit as the y it is added
+            // to, which is what lets this live at the drawing entry point.
+            return (f32) cn_tex_gauge_dy() * texelScale;
+        }
+    }
+
+    return 0.0f;
 }
 
 void cn_tex_apply(bool active) {
@@ -206,6 +278,10 @@ void cn_tex_on_rom_loaded(UNUSED bool active) {
 
 s32 cn_tex_gauge_dy(void) {
     return 0;
+}
+
+f32 cn_tex_gauge_texture_dy(UNUSED const void *texture, UNUSED f32 texelScale) {
+    return 0.0f;
 }
 
 #endif

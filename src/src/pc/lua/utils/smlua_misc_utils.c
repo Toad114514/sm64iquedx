@@ -8,7 +8,6 @@
 #include "game/camera.h"
 #include "game/hardcoded.h"
 #include "game/hud.h"
-#include "game/cn_tex.h"
 #include "menu/star_select.h"
 #include "pc/lua/smlua.h"
 #include "smlua_misc_utils.h"
@@ -260,11 +259,12 @@ static struct TextureInfo sPowerMeterTexturesInfo[] = {
 };
 
 void hud_render_power_meter(s32 health, f32 x, f32 y, f32 width, f32 height) {
-    // This is not the vanilla display list: it rebuilds the widget out of three
-    // texture quads at fixed US offsets, so the iQue layout has to be applied
-    // by hand. Without it the pie sits four texels high in its socket and the
-    // dark socket shows through underneath (see cn_tex_gauge_dy()).
-    f32 gaugeY = y + height / 4 + cn_tex_gauge_dy() * (height / 64);
+    // The iQue layout offset is *not* applied here: djui_hud_render_texture()
+    // recognises the wedge textures and shifts them itself (see
+    // cn_tex_gauge_texture_dy). That also fixes mods that skip this binding and
+    // rebuild the widget out of the same textures, which is the common case --
+    // HUD mods generally draw their own.
+    f32 gaugeY = y + height / 4;
     djui_hud_render_texture(&sPowerMeterTexturesInfo[0], x, y, width / 64, height / 64);
     djui_hud_render_texture(&sPowerMeterTexturesInfo[1], x + (width - 2) / 2, y, width / 64, height / 64);
     s32 numWedges = MIN(MAX(health >> 8, 0), 8);
@@ -274,7 +274,6 @@ void hud_render_power_meter(s32 health, f32 x, f32 y, f32 width, f32 height) {
 }
 
 void hud_render_power_meter_interpolated(s32 health, f32 prevX, f32 prevY, f32 prevWidth, f32 prevHeight, f32 x, f32 y, f32 width, f32 height) {
-    f32 gaugeDy = cn_tex_gauge_dy();
     djui_hud_render_texture_interpolated(&sPowerMeterTexturesInfo[0],
         prevX, prevY, prevWidth / 64, prevHeight / 64,
         x,     y,     width     / 64, height     / 64);
@@ -286,8 +285,8 @@ void hud_render_power_meter_interpolated(s32 health, f32 prevX, f32 prevY, f32 p
     s32 numWedges = MIN(MAX(health >> 8, 0), 8);
     if (numWedges != 0) {
         djui_hud_render_texture_interpolated(&sPowerMeterTexturesInfo[numWedges + 1],
-            prevX + (prevWidth - 4) / 4, prevY + prevHeight / 4 + gaugeDy * (prevHeight / 64), prevWidth / 64, prevHeight / 64,
-            x     + (width - 4)     / 4, y     + height     / 4 + gaugeDy * (height     / 64), width     / 64, height     / 64);
+            prevX + (prevWidth - 4) / 4, prevY + prevHeight / 4, prevWidth / 64, prevHeight / 64,
+            x     + (width - 4)     / 4, y     + height     / 4, width     / 64, height     / 64);
     }
 }
 
