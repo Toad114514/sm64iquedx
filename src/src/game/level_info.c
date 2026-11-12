@@ -262,11 +262,28 @@ char *convert_string_sm64_to_ascii(char *strAscii, const u8 *str64) {
     // A CN buffer cannot be expressed as single-byte text. Bail out with an
     // empty string rather than emitting mojibake; every in-game caller has a CN
     // path that reads the table pointer directly.
+    //
+    // It must be an *empty string*, never NULL, when the caller asked us to
+    // allocate. Returning NULL here used to break every mod that reads
+    // DialogEntry.text: dialog_table_init() stores this return value straight
+    // into `dialog->text`, which is exposed to Lua as a string field. With the
+    // pack on it was NULL for all 170 dialogs, so `dialog.text:gsub(...)` died
+    // with "attempt to index a nil value (field 'text')" (upstream issue #3,
+    // Character Select). Rendering was unaffected -- the renderer walks ->str
+    // -- so the breakage only showed up inside mods.
+    //
+    // Since the pack moved to its own dialog table, the US table this converts
+    // is ASCII in every build and this branch should not be reachable any more.
+    // Keep it correct anyway: it is the only thing standing between "a mod sees
+    // an empty string" and "a mod crashes".
     if (sm64_is_cn_text(str64)) {
-        if (strAscii) { strAscii[0] = '\0'; }
+        if (strAscii == NULL) {
+            strAscii = malloc(1);
+            if (strAscii == NULL) { return NULL; }
+        }
+        strAscii[0] = '\0';
         return strAscii;
     }
-    if (!str64) { return strAscii; }
 
     // allocate string with maximum size
     bool shouldResizeString = false;

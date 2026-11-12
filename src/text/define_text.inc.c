@@ -49,29 +49,19 @@ const u8 *cn_dialog_registry[256];
 #undef DEFINE_DIALOG
 
 #if defined(SM64COOPDX_CN_TEXT)
-// Non-const so apply_cn_text_pack() can repoint .str at runtime
-// (DialogEntry.str is already a mutable pointer to const data) and switch
-// .linesPerBox between the vanilla and iQue page heights.
+// The "original" entry is vanilla in every build now: the iQue strings live in
+// their own table (src/pc/dialog_table.c) so a mod's replacement can never
+// collide with them, and this one is what the Lua text layer calls
+// "unmodified". Nothing repoints it at runtime any more, hence `const`.
 //
-// The initial value stays the vanilla number and apply_cn_text_pack() corrects
-// it, because where the two disagree (DIALOG_005 3->4, DIALOG_117 1->2) the
-// whole box depends on it: the height scale, the page-break line and the
-// scissor window are all derived from dialog->linesPerBox. Keeping the US value
-// drew a box one line too short, so the last line of text hung out of it.
-//
-// .str starts on the vanilla buffer rather than NULL for the same reason: if
-// anything ever reads a dialog entry before the pack has been applied, drawing
-// English is a bad outcome, but dereferencing NULL is a crash.
-#define DEFINE_DIALOG(id, unused, linesPerBox, leftOffset, width, _) \
-    static struct DialogEntry dialog_entry_orig_ ## id = { \
-        unused, linesPerBox, leftOffset, width, dialog_text_ ## id, NULL, false \
-    };
-#else
+// .str points at the ROM-backed vanilla buffer rather than NULL: if anything
+// ever reads a dialog entry before the pack has been applied, drawing English
+// is a bad outcome, but dereferencing NULL is a crash.
+#endif
 #define DEFINE_DIALOG(id, unused, linesPerBox, leftOffset, width, _) \
     static const struct DialogEntry dialog_entry_orig_ ## id = { \
         unused, linesPerBox, leftOffset, width, dialog_text_ ## id, NULL, false \
     };
-#endif
 
 #include "dialogs.h"
 
@@ -216,16 +206,15 @@ void apply_cn_text_pack(void) {
     // cn_is_cn_string() can walk it without needing the count.
     u32 cnRegIdx = 0;
 
-    // dialogs: text pointer AND page height. Both have to follow the same
-    // switch -- a CN string paginated with the US line count overflows the box.
-// NOTE: the third macro parameter must NOT be named `linesPerBox`. The body
-// below also reads *and* writes the struct field of that name, and the C
-// preprocessor replaces every occurrence of a parameter name in the macro body
-// -- `.linesPerBox` would be rewritten to `.4` (the argument) and the file
-// would fail to compile. Hence `_lines`.
-#define DEFINE_DIALOG(id, _1, _lines, _3, _4, _5) \
-    dialog_entry_orig_ ## id.str = gCnTextPackActive ? cn_dialog_ ## id : dialog_text_ ## id; \
-    dialog_entry_orig_ ## id.linesPerBox = gCnTextPackActive ? cn_dialog_lines_ ## id : (_lines); \
+    // dialogs: fill the registry only.
+    //
+    // The strings and page heights are NOT copied out of here any more. They
+    // live in their own table (src/pc/dialog_table.c), which the renderer picks
+    // instead of the US table while the pack is on; that is what keeps a mod's
+    // smlua_replace_dialog() from ever touching Chinese text. What still has to
+    // happen here is the registry, because cn_is_cn_string() identifies CN text
+    // by pointer and the pointers come from the rom.
+#define DEFINE_DIALOG(id, _1, _2, _3, _4, _5) \
     cn_dialog_registry[cnRegIdx++] = (u8 *)cn_dialog_ ## id;
 
 #include "dialogs.h"
@@ -255,12 +244,43 @@ void apply_cn_text_pack(void) {
         #define CN_COURSE_SLOTS 26
         #define CN_ACT_SLOTS    200
 
+        // Which slots does this function own?
+        //
+        // The two tables are shared with the Lua text layer: a mod (and every
+        // romhack -- they all go through smlua_text_utils_course_name_replace()
+        // / act_name_replace) can install its own English name in any slot, and
+        // that pointer is a heap buffer it owns. Repointing such a slot at the
+        // pack's arrays does not just lose the mod's name, it also loses the
+        // only reference to its buffer (reset_course_or_act_name() will later
+        // see a pointer it does not own and skip the free).
+        //
+        // A slot is ours to rewrite only when it currently holds something this
+        // function itself installed: the vanilla buffer, the rom's CN name, or
+        // NULL. Anything else was put there at runtime and must stay -- the same
+        // policy as `DialogEntry.replaced` for dialogs, for the same reason: a
+        // mod's text is not translatable.
+        //
+        // `cn_rom_*` is consulted regardless of gCnTextPackActive because it is
+        // just the loader's pointer; that keeps the test symmetric, so turning
+        // the pack *off* still recognises (and replaces) the CN names it
+        // installed the last time it ran.
+        //
+        // No keep[] array: the test runs inline in the vanilla pass, and the CN
+        // overlay below recognises the slots it may touch by "still holds the
+        // vanilla pointer". A slot a mod owns never reaches that state here.
+        #define CN_IS_OURS(p, vanilla, cn) \
+            ((p) == NULL || (p) == (const u8 *)(vanilla) || (p) == (cn))
+
         // The vanilla buffers first: this is what the pack shows when it is
         // off, and it is the starting point every toggle returns to.
         for (i = 0; i < CN_COURSE_SLOTS && cn_course_name_vanilla[i] != NULL; i++) {
+            if (!CN_IS_OURS(seg2_course_name_table[i], cn_course_name_vanilla[i],
+                            cn_rom_course_name(i))) { continue; }
             seg2_course_name_table[i] = (u8 *)cn_course_name_vanilla[i];
         }
         for (i = 0; i < CN_ACT_SLOTS && cn_act_name_vanilla[i] != NULL; i++) {
+            if (!CN_IS_OURS(seg2_act_name_table[i], cn_act_name_vanilla[i],
+                            cn_rom_act_name(i))) { continue; }
             seg2_act_name_table[i] = (u8 *)cn_act_name_vanilla[i];
         }
 
@@ -272,30 +292,33 @@ void apply_cn_text_pack(void) {
             // The act overlay stops at 90 (15 stages x 6 acts). Slots 90..96 are
             // the port's extra texts, which the Lua text layer addresses by
             // index and expects to be the vanilla buffers.
-            for (i = 0; i < CN_COURSE_SLOTS; i++) {
+            for (i = 0; i < CN_COURSE_SLOTS && cn_course_name_vanilla[i] != NULL; i++) {
                 const u8 *p = cn_rom_course_name(i);
+                if (seg2_course_name_table[i] != cn_course_name_vanilla[i]) { continue; }
                 if (p != NULL) { seg2_course_name_table[i] = (u8 *)p; }
             }
-            for (i = 0; i < 90; i++) {
+            for (i = 0; i < 90 && cn_act_name_vanilla[i] != NULL; i++) {
                 const u8 *p = cn_rom_act_name(i);
+                if (seg2_act_name_table[i] != cn_act_name_vanilla[i]) { continue; }
                 if (p != NULL) { seg2_act_name_table[i] = (u8 *)p; }
             }
         }
 
+        #undef CN_IS_OURS
         #undef CN_COURSE_SLOTS
         #undef CN_ACT_SLOTS
     }
 
-    // The dialog entries the renderer actually uses live in a heap copy made by
-    // dialog_table_init(), which ran before this function ever did -- so those
-    // copies still carry the static initialiser's US linesPerBox. Push the
-    // freshly switched values (str *and* page height) into them, otherwise the
-    // CN text is paginated with the US line count and overflows the box.
-    // Declared here rather than included: this file is textconv'd and included
-    // from segment2.c, which has no reason to pull in the PC dialog table.
+    // The dialog strings live in their own table, so the only thing to do here
+    // is make sure it is current: apply_cn_text_pack() also runs after the rom
+    // finishes loading and after every Lua reset (smlua_text_utils_reset_all),
+    // and refresh is cheap and idempotent.
+    //
+    // Declared rather than included: this file is textconv'd and included from
+    // segment2.c, which has no reason to pull in the PC dialog table.
     {
-        extern void dialog_table_sync_vanilla(void);
-        dialog_table_sync_vanilla();
+        extern void dialog_table_refresh_cn(void);
+        dialog_table_refresh_cn();
     }
 }
 #endif

@@ -54,6 +54,28 @@
 #define CN_PACK_ACTIVE() false
 #endif
 
+// Is the dialog on screen laid out with iQue metrics?
+//
+// Read from the string that will actually be drawn, NOT from the pack switch.
+// The two normally agree, but Lua can break the tie: a mod (or a romhack --
+// they all go through smlua_text_utils_dialog_replace()) may overwrite a
+// dialog with its own English text, and apply_cn_text_pack() deliberately
+// leaves `replaced` entries alone, so the text stays English while the switch
+// is on. Deriving the geometry from the switch drew exactly that string with
+// CN metrics: 20px line pitch instead of 16, one line fewer per page and a
+// taller box. Layout is a property of the glyphs, so it has to follow the
+// glyphs (see `cn_dialog_registry` / cn_is_cn_string()).
+//
+// Set once per frame at the top of render_dialog_entries(); every geometry
+// decision below (box height, line pitch, page length, the two triangles) is
+// reached from that function with the same dialog.
+#if defined(SM64COOPDX_CN_TEXT)
+static bool sDialogLayoutCn = false;
+#define CN_DIALOG_LAYOUT() (sDialogLayoutCn)
+#else
+#define CN_DIALOG_LAYOUT() false
+#endif
+
 u16 gDialogColorFadeTimer;
 s8 gLastDialogLineNum;
 s32 gDialogVariable;
@@ -1450,6 +1472,26 @@ bool handle_dialog_hook(s32 dialogId) {
     }
 
     free(sOverrideDialogHookString);
+    sOverrideDialogHookString = NULL;
+
+    // An override from a mod cannot be shown together with the pack.
+    //
+    // The pack renders its own table (dialog_table_get_render), and that table
+    // holds the translation of the *vanilla* dialog. Arbitrary mod text has no
+    // Chinese image, so there is nothing to merge: accept either the mod's
+    // English or the pack's Chinese, and while the pack is on it is the pack.
+    // This is also what keeps a mod that round-trips DialogEntry.text alive:
+    // Character Select reads the US string (which is *not* what is on screen),
+    // optionally gsubs it, and hands it back -- installing that here would
+    // paint English over the Chinese text.
+    //
+    // Two things stay untouched: `openDialogBox = false` above (the API for
+    // "show nothing at all") and custom dialogs (id >= DIALOG_COUNT), which the
+    // pack does not cover, so dialog_table_render_is_cn() is false for them.
+    if (dialogTextOverride != NULL && dialog_table_render_is_cn(dialogId)) {
+        dialogTextOverride = NULL;
+    }
+
     if (dialogTextOverride != NULL) {
         sOverrideDialogHookString = convert_string_ascii_to_sm64(NULL, dialogTextOverride, false);
     } else {
@@ -1571,10 +1613,11 @@ void render_dialog_box_type(struct DialogEntry *dialog, s8 linesPerBox) {
     // iQue gives the box one extra line of height on top of drawing one line
     // fewer per page (see totalLines below). That pairing is the whole trick:
     // the taller 16px CJK glyphs need the room, and the shorter page keeps the
-    // text from filling it. Both halves must follow the same runtime switch as
-    // the strings, otherwise the CN text overflows the US-sized box.
+    // text from filling it. Both halves must follow the same runtime decision
+    // as the strings, otherwise the CN text overflows the US-sized box -- or,
+    // in the mod-replaced case, English text sits in a box a line too tall.
     f32 boxLines = (f32) linesPerBox;
-    if (CN_PACK_ACTIVE()) {
+    if (CN_DIALOG_LAYOUT()) {
         boxLines += 1.0f;
     }
     create_dl_scale_matrix(MENU_MTX_NOPUSH, dialogWidth / 130, (boxLines / Y_VAL2) + 0.1, 1.0f);
@@ -1651,9 +1694,10 @@ void render_generic_dialog_char_at_pos(struct DialogEntry *dialog, s16 x, s16 y,
 
 // iQue spaces dialog lines 20px apart (vs the US 16) so a 16px CJK glyph and
 // its shadow do not touch the line below. Y_VAL3 is a compile-time constant, so
-// the CN value has to be selected at each use.
+// the CN value has to be selected at each use -- from the per-dialog layout
+// flag, not from the pack switch (see CN_DIALOG_LAYOUT()).
 #if defined(SM64COOPDX_CN_TEXT)
-#define CN_DIALOG_LINE_H() (CN_PACK_ACTIVE() ? 20 : Y_VAL3)
+#define CN_DIALOG_LINE_H() (CN_DIALOG_LAYOUT() ? 20 : Y_VAL3)
 #else
 #define CN_DIALOG_LINE_H() (Y_VAL3)
 #endif
@@ -1854,9 +1898,13 @@ void handle_dialog_text_and_pages(s8 colorMode, struct DialogEntry *dialog, s8 l
         // two-page scroll case). Together with the taller box and the 20px
         // line spacing this is what makes the CJK text breathe instead of
         // spilling out of the box.
-        totalLines = CN_PACK_ACTIVE() ? (linesPerBox * 2 - 1) : (linesPerBox * 2 + 1);
+        //
+        // `cn` (the encoding of the string about to be drawn) rather than the
+        // pack switch: a Lua-replaced English dialog must still be paginated
+        // like vanilla, or its last line ends up alone on a second page.
+        totalLines = cn ? (linesPerBox * 2 - 1) : (linesPerBox * 2 + 1);
     } else {
-        totalLines = CN_PACK_ACTIVE() ? linesPerBox : (linesPerBox + 1);
+        totalLines = cn ? linesPerBox : (linesPerBox + 1);
     }
 
     gSPDisplayList(gDisplayListHead++, dl_ia_text_begin);
@@ -2178,12 +2226,14 @@ void render_dialog_triangle_choice(void) {
 
     // Choice marker geometry. iQue's CN build moves the marker a 20px line
     // lower (Y_VAL4_2 20 vs 16) and its X term is ((n - 1) * 58) + 0; this
-    // function's folded `n * X - C` form expresses that as 58 / 58.
+    // function's folded `n * X - C` form expresses that as 58 / 58. Follow the
+    // dialog's own layout (CN_DIALOG_LAYOUT), since a Lua-replaced English
+    // dialog keeps the US 16px pitch no matter what the pack switch says.
     s32 xVal4_1 = X_VAL4_1;
     s32 xVal4_2 = X_VAL4_2;
     s32 yVal4_2 = Y_VAL4_2;
 #if defined(SM64COOPDX_CN_TEXT)
-    if (CN_PACK_ACTIVE()) {
+    if (CN_DIALOG_LAYOUT()) {
         xVal4_1 = 58;
         xVal4_2 = 58;
         yVal4_2 = 20;
@@ -2235,7 +2285,7 @@ void render_dialog_string_color(s8 linesPerBox) {
     // so it still sits at the bottom edge of the (one line taller) CN box.
     s32 yVal5_1 = Y_VAL5_1;
 #if defined(SM64COOPDX_CN_TEXT)
-    if (CN_PACK_ACTIVE()) {
+    if (CN_DIALOG_LAYOUT()) {
         yVal5_1 = -18;
     }
 #endif
@@ -2356,12 +2406,28 @@ void render_dialog_entries(void) {
 #if defined(VERSION_US) || defined(VERSION_SH)
     s8 lowerBound = 0;
 #endif
-    struct DialogEntry *dialog = dialog_table_get(gDialogID);
+    struct DialogEntry *dialog = dialog_table_get_render(gDialogID);
 
     if (dialog == NULL) {
         gDialogID = DIALOG_NONE;
         return;
     }
+
+    // Every geometry decision for this frame (box height, line pitch, page
+    // length, choice / next-page triangles) is derived from this one flag, so
+    // it is decided here, once, from the string the text renderer will draw.
+    // With the two tables (src/pc/dialog_table.c) that string is either wholly
+    // Chinese or wholly the US text -- there is no per-entry mixing left -- but
+    // the flag is still taken from the string rather than from the switch, so
+    // the geometry can never disagree with the glyphs. A HOOK_ON_DIALOG
+    // override is always ASCII here (the pack drops overrides for the dialogs
+    // it covers), hence vanilla layout.
+    // See CN_DIALOG_LAYOUT() at the top of the file.
+#if defined(SM64COOPDX_CN_TEXT)
+    sDialogLayoutCn = cn_is_cn_string(sOverrideDialogHookString != NULL
+                                      ? sOverrideDialogHookString
+                                      : (const u8 *) segmented_to_virtual(dialog->str));
+#endif
 
 #ifdef VERSION_EU
     gDialogX = 0;
@@ -2651,7 +2717,9 @@ void do_cutscene_handler(void) {
 
 // "Dear Mario" message handler
 void print_peach_letter_message(void) {
-    struct DialogEntry *dialog = dialog_table_get(gDialogID);
+    // Same source as the dialog box: this prints the letter's dialog string, so
+    // it has to follow the pack table too rather than the US one.
+    struct DialogEntry *dialog = dialog_table_get_render(gDialogID);
 
     const u8* str = sOverrideDialogHookString != NULL ? sOverrideDialogHookString : dialog->str;
 
