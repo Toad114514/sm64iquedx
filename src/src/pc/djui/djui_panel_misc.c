@@ -11,6 +11,7 @@
 #if defined(SM64COOPDX_CN_TEXT)
 #include "game/segment2.h"
 #include "pc/rom_checker.h"
+#include "pc/cn_text_gate.h"
 #include "game/cn_rom_assets.h"
 #endif
 #if defined(_WIN32)
@@ -84,8 +85,8 @@ static void djui_panel_misc_chinese_text_changed(UNUSED struct DjuiBase* checkbo
 //     reads as "a mysterious blank row under the greyed checkbox";
 //   * a fixed height (24) does not follow the wrapped line count, so a longer
 //     translation would clip and a shorter one would leave a gap.
-static void djui_panel_misc_chinese_text_hint(struct DjuiBase* body) {
-    struct DjuiText* hint = djui_text_create(body, DLANG(MISC, CHINESE_TEXT_PACK_NO_ROM));
+static void djui_panel_misc_chinese_text_hint(struct DjuiBase* body, const char* message) {
+    struct DjuiText* hint = djui_text_create(body, message);
     if (hint == NULL) { return; }
 
     // 65% of the menu font, expressed in the font's own units.
@@ -112,15 +113,21 @@ static void djui_panel_misc_chinese_text_create(struct DjuiBase* body) {
     struct DjuiCheckbox* checkbox = djui_checkbox_create(body, DLANG(MISC, CHINESE_TEXT_PACK),
                                                          &configChineseText,
                                                          djui_panel_misc_chinese_text_changed);
-    if (checkbox == NULL || cn_rom_assets_ready()) {
+    if (checkbox == NULL || (cn_rom_assets_ready() && !gCnTextPackRomhack)) {
         return;
     }
 
+    // Two different reasons can grey this box out, and they need two different
+    // sentences: no cartridge ("put the dump in the folder") and a romhack
+    // ("not applicable here"). Both mean the same thing to the code -- the pack
+    // is off whatever the stored value says -- so the mirror below is shared.
     sChineseTextUnavailable = false;
     checkbox->value = &sChineseTextUnavailable;
     djui_base_set_enabled(&checkbox->base, false);
 
-    djui_panel_misc_chinese_text_hint(body);
+    djui_panel_misc_chinese_text_hint(body, gCnTextPackRomhack
+        ? DLANG(MISC, CHINESE_TEXT_PACK_ROMHACK)
+        : DLANG(MISC, CHINESE_TEXT_PACK_NO_ROM));
 }
 #endif
 

@@ -504,6 +504,14 @@ void* main_game_init(UNUSED void* dummy) {
     return NULL;
 }
 
+// Is a romhack among the enabled mods? Storage for cn_text_gate.h's extern.
+//
+// Defined *outside* SM64COOPDX_CN_TEXT on purpose: rom_assets.c runs the same
+// gate on the loading thread and is compiled in both states (the pack itself is
+// stubbed out by cn_tex.c when the flag is off), so the symbol has to exist
+// there too. It stays false whenever the pack is compiled out.
+bool gCnTextPackRomhack = false;
+
 #if defined(SM64COOPDX_CN_TEXT)
 // Called once the vanilla rom has been imported and DJUI is up.
 //
@@ -528,6 +536,76 @@ void* main_game_init(UNUSED void* dummy) {
 // Note for configs written by an older build: configChineseTextPrompted could
 // only become true by answering the old first-run box; that answer is now
 // re-derived from detection (owning the rom means "on").
+
+// Is one of the enabled mods a romhack?
+//
+// "Romhack" here means "ships data that replaces the game's own": a level
+// (levels/*.lvl), an actor model / collision (actors/*.bin, actors/*.col) or a
+// behavior (data/*.bhv). Those are exactly the mod directories mod_load_files()
+// scans, so the test is on the directory prefix rather than on a hand-written
+// list of extensions -- a new file type in one of those directories is romhack
+// data by construction.
+//
+// What this deliberately does NOT count: textures/ (a skin, e.g. Character
+// Select's 50 .tex) and scripts (any .lua). Those leave the level geometry, the
+// behavior table and -- the part that matters here -- the text id space alone,
+// so the iQue tables still line up and the pack keeps working. Only data that
+// re-authors the game itself makes the pack meaningless.
+//
+// gLocalMods (not gActiveMods) is the right list to read at startup: mods_activate()
+// runs late (it is called from network_init(), i.e. *after* chinese_text_pack_init()),
+// while gLocalMods is already populated and carries the enabled flags by the time
+// mods_init()/enable_queued_mods() have run. Once a session is being started the
+// active set is authoritative instead -- it also covers mods streamed in from a
+// server, which never appear in gLocalMods.
+static bool cn_romhack_mods_present(void) {
+    static const char *const sRomhackDirs[] = { "levels/", "actors/", "data/" };
+    struct Mods *list = (gActiveMods.entryCount > 0) ? &gActiveMods : &gLocalMods;
+    u16 i, f;
+    u32 d;
+
+    for (i = 0; i < list->entryCount; i++) {
+        struct Mod *mod = list->entries[i];
+
+        if (mod == NULL || !mod->enabled) { continue; }
+
+        for (f = 0; f < mod->fileCount; f++) {
+            const char *rel = mod->files[f].relativePath;
+
+            for (d = 0; d < sizeof(sRomhackDirs) / sizeof(sRomhackDirs[0]); d++) {
+                size_t len = strlen(sRomhackDirs[d]);
+
+                if (strncmp(rel, sRomhackDirs[d], len) == 0) { return true; }
+            }
+        }
+    }
+
+    return false;
+}
+
+// Keep the live pack state consistent with the mod set.
+//
+// Called from chinese_text_pack_init() (startup / config reload) and from
+// mods_activate() (the player ticked a mod in the menu and pressed 创建). The
+// second call is what makes "enable a romhack, start a game" turn the pack off
+// without a restart, instead of keeping iQue's tables over hacked data.
+void cn_text_pack_romhack_refresh(void) {
+    bool const romhack = cn_romhack_mods_present();
+
+    gCnTextPackRomhack = romhack;
+
+    if (!romhack || !gCnTextPackActive) { return; }
+
+    // A romhack arrived while the pack was live. Everything that decides *what
+    // to draw* reads gCnTextPackActive, so dropping it is enough for the glyphs,
+    // the dialog tables and the course/act names; the texture overlay keeps its
+    // own copy of the US pixels and has to be told explicitly.
+    gCnTextPackActive = 0;
+    apply_cn_text_pack();
+    cn_tex_apply(false);
+    LOG_INFO("chinese text pack: disabled, a loaded mod replaces the game's own data");
+}
+
 static void chinese_text_pack_init(void) {
     bool const detected = rom_checker_ique_rom_present();
 
@@ -537,10 +615,18 @@ static void chinese_text_pack_init(void) {
     // precondition we merely *check* -- without it there is no data to show.
     bool const loaded = detected && cn_rom_assets_load(rom_checker_ique_rom_path());
 
-    // No rom / unreadable rom -> off, no matter what the config says. With the
-    // rom -> the player's manual choice if there is one, otherwise on. The rule
-    // itself lives in cn_text_gate.h so it can be tested on its own.
-    bool const target = cn_text_pack_target(loaded, configChineseTextUserSet, configChineseText);
+    // A romhack re-authors the US data the pack would sit on top of, so it wins
+    // over both detection and the player's stored choice (rule 2 in
+    // cn_text_gate.h). Read here -- after mods_init()/enable_queued_mods() have
+    // run, before anything is drawn.
+    bool const romhack = cn_romhack_mods_present();
+
+    gCnTextPackRomhack = romhack;
+
+    // No rom / unreadable rom / romhack -> off, no matter what the config says.
+    // With the rom -> the player's manual choice if there is one, otherwise on.
+    // The rule itself lives in cn_text_gate.h so it can be tested on its own.
+    bool const target = cn_text_pack_target(loaded, configChineseTextUserSet, configChineseText, romhack);
 
     // configChineseText is deliberately left as the player wrote it. A missing
     // dump only means "not this session": storing false here would make one
@@ -557,15 +643,25 @@ static void chinese_text_pack_init(void) {
     gCnTextPackActive = target ? 1 : 0;
     apply_cn_text_pack();
 
+    // rom_assets.c already made the same decision for the textures, but it runs
+    // on the loading thread *before* the mods are known, so with the rom present
+    // it overlaid the iQue pixels and only later do we find out that a romhack
+    // replaced the data underneath. Restore the US pixels in that case; with no
+    // rom it is a no-op because cn_tex only applies what it has.
+    if (!target) {
+        cn_tex_apply(false);
+    }
+
     if (needSave) {
         configfile_save(configfile_name());
     }
 
-    LOG_INFO("chinese text pack: iQue rom %s (%s), pack %s%s",
+    LOG_INFO("chinese text pack: iQue rom %s (%s), pack %s%s%s",
              detected ? "found" : "not found",
              loaded ? "assets loaded" : "assets unavailable",
              target ? "enabled" : "disabled",
-             (loaded && configChineseTextUserSet) ? " (kept: set by the player)" : "");
+             romhack ? " (romhack mod loaded: US data, no translation)" : "",
+             (loaded && !romhack && configChineseTextUserSet) ? " (kept: set by the player)" : "");
 }
 
 // Runtime toggle used by the MISC settings checkbox. Swaps the live dialog /
@@ -575,6 +671,12 @@ void chinese_text_pack_set_active(bool active) {
     // gate covers the paths that do not go through the UI (a config reload, a
     // future caller), so "no cart, no text" cannot be bypassed by accident.
     if (active && !cn_rom_assets_ready()) {
+        active = false;
+    }
+    // Same shape for rule 2: a romhack ignores the switch entirely, so a caller
+    // that gets here anyway is turned away instead of producing the mixed state
+    // (iQue tables over hacked ids) this whole gate exists to prevent.
+    if (active && gCnTextPackRomhack) {
         active = false;
     }
     configChineseText = active;

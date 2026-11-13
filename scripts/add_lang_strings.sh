@@ -1,5 +1,5 @@
 #!/bin/sh
-# 给目标树里的 lang/*.ini 补上「中文字库」开关所需的两条字符串。幂等，可重复跑。
+# 给目标树里的 lang/*.ini 补上「中文字库」开关所需的字符串。幂等，可重复跑。
 #
 #   scripts/add_lang_strings.sh <上游根目录> [--check]
 #
@@ -9,12 +9,11 @@
 #   补丁，补丁数会涨上去，上游动一行又要全部重生成。这里改成「按键插入」：
 #   锚点存在就插在锚点后，键已存在就跳过，所以同一份脚本对四套上游都成立。
 #
-# 插入的三条：
+# 插入的两条：
 #   1. [MISC] 段内，紧跟 DISABLE_POPUPS：
 #        CHINESE_TEXT_PACK          设置界面里的复选框标题
-#   2. [MISC] 段内，紧跟 CHINESE_TEXT_PACK：
-#        CHINESE_TEXT_PACK_NO_ROM   没有神游 dump 时复选框下面那行灰字
-#   3. [LANGUAGE] 段内，紧跟 Spanish：
+#        （开关不可用时它是灰的，就只是灰的——不再配一行说明文字）
+#   2. [LANGUAGE] 段内，紧跟 Spanish：
 #        Chinese = "..."            语言列表里的中文条目
 #      汉化版上游已有这条，脚本自动跳过。
 set -eu
@@ -91,20 +90,15 @@ for ini in "$target/lang/English.ini" "$target/lang/Chinese.ini"; do
     case "$(basename "$ini")" in
         English.ini)
             pack='CHINESE_TEXT_PACK = "Chinese Text Pack (iQue)"'
-            no_rom='CHINESE_TEXT_PACK_NO_ROM = "Requires the iQue dump: put 0010cd30.z64 in the game folder, then restart"'
             name='Chinese = "Chinese (中文)"'
             ;;
         Chinese.ini)
             pack='CHINESE_TEXT_PACK = "中文字库（神游）"'
-            no_rom='CHINESE_TEXT_PACK_NO_ROM = "需要神游卡带 dump：把 0010cd30.z64 放进游戏目录后重启"'
             name='Chinese = "中文"'
             ;;
         *) continue ;;
     esac
     insert_after "$ini" DISABLE_POPUPS "$pack" CHINESE_TEXT_PACK
-    # 锚点是上一条：它的插入是幂等的，所以第二遍一定找得到这一行。
-    # 锚点末尾带一个空格，免得 `^CHINESE_TEXT_PACK` 同时命中 CHINESE_TEXT_PACK_NO_ROM。
-    insert_after "$ini" "CHINESE_TEXT_PACK " "$no_rom" CHINESE_TEXT_PACK_NO_ROM
     insert_after "$ini" "Spanish " "$name" Chinese
 done
 

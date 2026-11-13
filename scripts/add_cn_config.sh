@@ -1,9 +1,9 @@
 #!/bin/sh
-# 把中文字库的配置项插进 src/pc/configfile.c。
+# 把中文字库的开关插进 src/pc/configfile.c。
 #
 # 为什么这个文件不做成补丁：两套 Android 上游的 configfile.c 都在 PC 补丁要插入
 # 的同一位置插了自己的 TOUCH_CONTROLS 块，所以 0001 必须 --exclude 掉它；而剩下的
-# 「上游 + 我们这 6 行」只有在**各自的上游**上才是正确终态，做成补丁就得每个上游
+# 「上游 + 我们这 2 行」只有在**各自的上游**上才是正确终态，做成补丁就得每个上游
 # 各一份（原来的 0005 / 0006），而两份补丁的差别只有 hunk 上下文里的
 # `configSnapTouch` / `configElementSnap` —— 纯属上下文漂移。
 #
@@ -28,13 +28,11 @@ mode=${2:-}
 cfg=$target/src/pc/configfile.c
 [ -f "$cfg" ] || { echo "找不到 $cfg" >&2; exit 2; }
 
-GLOBALS='bool         configChineseText                    = true;
-bool         configChineseTextPrompted            = false;
-bool         configChineseTextUserSet             = false;'
+# 只存开关本身。能不能真的跑由 cn_text_pack_target() 推导（有卡带、没有改版），
+# 那是运行期状态，不该写进配置文件——存一份派生结果只会和真相不一致。
+GLOBALS='bool         configChineseText                    = true;'
 
-ENTRIES='    {.name = "chinese_text",                   .type = CONFIG_TYPE_BOOL,   .boolValue   = &configChineseText},
-    {.name = "chinese_text_prompted",          .type = CONFIG_TYPE_BOOL,   .boolValue   = &configChineseTextPrompted},
-    {.name = "chinese_text_user_set",          .type = CONFIG_TYPE_BOOL,   .boolValue   = &configChineseTextUserSet},'
+ENTRIES='    {.name = "chinese_text",                   .type = CONFIG_TYPE_BOOL,   .boolValue   = &configChineseText},'
 
 # 锚点用**固定子串**而不是正则：`\{` 在 BRE 里是区间的开头，GNU grep 会直接报
 # 「不匹配的 \{」。这两个子串在三份 configfile.c（PC 基线、两个 Android 上游）里
@@ -68,8 +66,8 @@ fi
 
 if [ "$mode" = "--check" ]; then
     echo "待插入：$(basename "$target")/src/pc/configfile.c"
-    if [ "$have_globals" = no ]; then echo "  - 3 个 configChineseText* 声明"; fi
-    if [ "$have_entries" = no ]; then echo "  - 3 条 chinese_text* 配置表条目"; fi
+    if [ "$have_globals" = no ]; then echo "  - 1 个 configChineseText 声明"; fi
+    if [ "$have_entries" = no ]; then echo "  - 1 条 chinese_text 配置表条目"; fi
     exit 0
 fi
 

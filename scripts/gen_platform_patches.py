@@ -171,7 +171,7 @@ def resolve_conflicts(text: str, rel: str, count: int) -> str:
     def decide(m):
         ours, theirs = m.group(1), m.group(2)
         if rel == CONFIGFILE:
-            ok = "#ifdef TOUCH_CONTROLS" in ours and "chinese_text_user_set" in theirs
+            ok = "#ifdef TOUCH_CONTROLS" in ours and '.name = "chinese_text"' in theirs
             return ours + theirs if ok else None
         if rel == "src/pc/pc_main.c":
             ok = "int SDL_main" in ours and "chinese_text_pack_init" in theirs
