@@ -53,7 +53,7 @@
  
  #include "engine/math_util.h"
  
-@@ -500,6 +504,197 @@
+@@ -500,6 +504,177 @@
      return NULL;
  }
  
@@ -74,21 +74,15 @@
 +// no longer a condition we merely *check* -- without it there are no pixels and
 +// no strings, so the pack cannot be shown at all.
 +//
-+//   * the exact 神游 (iQue) rom dump is present -> default on, and the player
-+//     may switch it off by hand (that choice then wins over detection in both
-+//     directions, otherwise unchecking the box would silently undo itself on
-+//     the next start)
-+//   * it is not present -> off for this session, the settings checkbox is
-+//     greyed out, and a hint explains why (djui_panel_misc.c)
++//   * the exact 神游 (iQue) rom dump is present -> on, unless the player
++//     unchecked the box (the checkbox is the only thing that ever changes it)
++//   * it is not present, or an enabled mod is a romhack -> off for this
++//     session and the settings checkbox is greyed out (djui_panel_misc.c)
 +//
-+// The gate is deliberately unconditional: a config written by an older build
-+// can carry configChineseText = true on a machine that never supplied the rom,
-+// and the pack must not light up just because configChineseTextUserSet was set
-+// once. The stored value is not rewritten (see below) -- only the live state is.
-+//
-+// Note for configs written by an older build: configChineseTextPrompted could
-+// only become true by answering the old first-run box; that answer is now
-+// re-derived from detection (owning the rom means "on").
++// configChineseText is the checkbox position, not the live state -- a config
++// written by an older build can carry "true" on a machine that never supplied
++// the rom, and the pack must not light up because of it. Only the live state
++// changes here; the stored value is left alone (see below).
 +
 +// Is one of the enabled mods a romhack?
 +//
@@ -169,30 +163,26 @@
 +    bool const loaded = detected && cn_rom_assets_load(rom_checker_ique_rom_path());
 +
 +    // A romhack re-authors the US data the pack would sit on top of, so it wins
-+    // over both detection and the player's stored choice (rule 2 in
-+    // cn_text_gate.h). Read here -- after mods_init()/enable_queued_mods() have
-+    // run, before anything is drawn.
++    // over both detection and the stored choice (rule 2 in cn_text_gate.h).
++    // Read here -- after mods_init()/enable_queued_mods() have run, before
++    // anything is drawn.
 +    bool const romhack = cn_romhack_mods_present();
 +
 +    gCnTextPackRomhack = romhack;
 +
-+    // No rom / unreadable rom / romhack -> off, no matter what the config says.
-+    // With the rom -> the player's manual choice if there is one, otherwise on.
-+    // The rule itself lives in cn_text_gate.h so it can be tested on its own.
-+    bool const target = cn_text_pack_target(loaded, configChineseTextUserSet, configChineseText, romhack);
++    // No rom / unreadable rom / romhack -> off. Otherwise the checkbox decides,
++    // and its default is on. The rule itself lives in cn_text_gate.h so it can
++    // be tested on its own.
++    bool const target = cn_text_pack_target(loaded, configChineseText, romhack);
 +
-+    // configChineseText is deliberately left as the player wrote it. A missing
-+    // dump only means "not this session": storing false here would make one
-+    // launch with the cartridge in an unscanned folder (a phone, a second
-+    // drive) silently permanent, and the player would have no way back short of
-+    // toggling the box while the dump is nowhere to be found.
++    // configChineseText is deliberately left as the player wrote it: it is the
++    // checkbox position, not the live state. A missing dump only means "not
++    // this session", and storing false here would make one launch with the
++    // cartridge in an unscanned folder (a phone, a second drive) permanent.
 +    //
 +    // Everything that decides *what to draw* goes through gCnTextPackActive or
 +    // through cn_text_pack_target() again (rom_assets.c does the latter), so the
 +    // config value is never mistaken for the live one.
-+    bool const needSave = !configChineseTextPrompted;
-+    configChineseTextPrompted = true;
-+
 +    gCnTextPackActive = target ? 1 : 0;
 +    apply_cn_text_pack();
 +
@@ -205,38 +195,27 @@
 +        cn_tex_apply(false);
 +    }
 +
-+    if (needSave) {
-+        configfile_save(configfile_name());
-+    }
-+
-+    LOG_INFO("chinese text pack: iQue rom %s (%s), pack %s%s%s",
++    LOG_INFO("chinese text pack: iQue rom %s (%s), pack %s%s",
 +             detected ? "found" : "not found",
 +             loaded ? "assets loaded" : "assets unavailable",
 +             target ? "enabled" : "disabled",
-+             romhack ? " (romhack mod loaded: US data, no translation)" : "",
-+             (loaded && !romhack && configChineseTextUserSet) ? " (kept: set by the player)" : "");
++             romhack ? " (romhack mod loaded: US data, no translation)" : "");
 +}
 +
 +// Runtime toggle used by the MISC settings checkbox. Swaps the live dialog /
 +// course / act tables and makes the choice persistent.
 +void chinese_text_pack_set_active(bool active) {
-+    // The settings checkbox is already greyed out without the rom; this second
-+    // gate covers the paths that do not go through the UI (a config reload, a
-+    // future caller), so "no cart, no text" cannot be bypassed by accident.
-+    if (active && !cn_rom_assets_ready()) {
-+        active = false;
-+    }
-+    // Same shape for rule 2: a romhack ignores the switch entirely, so a caller
-+    // that gets here anyway is turned away instead of producing the mixed state
-+    // (iQue tables over hacked ids) this whole gate exists to prevent.
-+    if (active && gCnTextPackRomhack) {
-+        active = false;
++    // The checkbox is greyed out in both cases, so this is defence in depth for
++    // the paths that do not go through the UI (a config reload, a future
++    // caller): switching the pack on without the dump would draw nothing, and
++    // switching it on over a romhack produces the mixed state (iQue tables over
++    // hacked ids) that cn_text_gate.h exists to prevent. Refuse without
++    // touching the stored choice -- a click that cannot take effect must not
++    // rewrite what the player asked for.
++    if (active && (!cn_rom_assets_ready() || gCnTextPackRomhack)) {
++        return;
 +    }
 +    configChineseText = active;
-+    // Once the player flips this switch by hand, rom detection stops being the
-+    // authority on it.
-+    configChineseTextUserSet = true;
-+    configChineseTextPrompted = true;
 +    gCnTextPackActive = active ? 1 : 0;
 +    apply_cn_text_pack();
 +    // The pack also swaps a handful of textures (the power meter's 「力量」 and
@@ -245,13 +224,14 @@
 +    cn_tex_apply(active);
 +    configfile_save(configfile_name());
 +}
++
 +#endif
 +
 +
  int main(int argc, char *argv[]) {
      // handle terminal arguments
      if (!parse_cli_opts(argc, argv)) { return 0; }
-@@ -577,6 +772,13 @@
+@@ -577,6 +752,13 @@
      djui_init_late();
      djui_console_message_dequeue();
  
@@ -280,7 +260,7 @@
  
  #define ROM_ASSET_LOAD_DATA(bits) for (u##bits *data = asset->ptr; asset->cursor < asset->segmentedSize; data++) { *data = READ##bits(asset); }
  
-@@ -186,6 +190,39 @@
+@@ -186,6 +190,38 @@
      }
  
      fclose(sRomFile);
@@ -307,7 +287,6 @@
 +    // startup path later just finds it already done.
 +    bool const packData = cn_rom_assets_ready() || cn_rom_assets_load(rom_checker_ique_rom_path());
 +    cn_tex_on_rom_loaded(cn_text_pack_target(packData,
-+                                             configChineseTextUserSet,
 +                                             configChineseText,
 +                                             // Mods are not known yet on this thread
 +                                             // (mods_init() runs later), so this is

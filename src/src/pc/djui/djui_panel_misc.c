@@ -57,57 +57,25 @@ static void djui_panel_misc_chinese_text_changed(UNUSED struct DjuiBase* checkbo
 }
 
 // The pack's glyphs, dialog text and textures are read out of the player's own
-// 神游 dump at startup, so a machine without that dump has nothing to show --
-// but "nothing to show" is not the same as "explained": without this gate the
-// player just assumes the feature is broken. So the checkbox is greyed out
-// (DJUI paints a disabled interactable in grey and refuses the click) plus a
-// short reason underneath.
+// 神游 dump at startup, and a romhack re-authors the very data the pack would sit
+// on top of. In both cases the switch cannot do anything, so it is greyed out
+// (DJUI paints a disabled interactable in grey and refuses the click) rather
+// than tapping into a no-op.
 //
 // chinese_text_pack_init() applies the same rule at startup and rom_assets.c
 // applies it to the texture overlay; this function only makes the UI honest
-// about it.
+// about it. No extra sentence is added underneath: the grey box is the whole
+// message, and a disabled control that needs a footnote to explain itself is
+// usually a sign the state should have been unreachable instead.
 //
 // The checkbox is bound to a mirror instead of configChineseText, because the
-// stored value is deliberately left alone when the dump is missing (see
+// stored value is deliberately left alone when the pack cannot run (see
 // chinese_text_pack_init): it can legitimately say "true" while nothing is on.
 // Showing that would be a ticked-but-grey box, i.e. "it is on and you cannot
 // turn it off". The mirror reads false, which is what is actually drawn, and
 // nothing can write to it -- disabled controls do not dispatch value changes,
 // but the pointer swap means even a future fix to that cannot leak into the
 // config.
-
-// The reason line is a normal DjuiText, so it has to be sized the way every
-// other wrapping text in the menus is (see djui_panel_confirm_create_ex):
-// give it the full width, compute the tree, count the lines the string actually
-// wraps to, then hand it exactly that many lines. Two things this avoids:
-//   * fontScale is NOT a ratio -- the default is font->defaultFontScale (32),
-//     so 0.7f is a 45x-too-small font. It renders as a sub-pixel smear, which
-//     reads as "a mysterious blank row under the greyed checkbox";
-//   * a fixed height (24) does not follow the wrapped line count, so a longer
-//     translation would clip and a shorter one would leave a gap.
-static void djui_panel_misc_chinese_text_hint(struct DjuiBase* body, const char* message) {
-    struct DjuiText* hint = djui_text_create(body, message);
-    if (hint == NULL) { return; }
-
-    // 65% of the menu font, expressed in the font's own units.
-    f32 fontScale = hint->font->defaultFontScale * 0.65f;
-    djui_text_set_font_scale(hint, fontScale);
-    djui_text_set_alignment(hint, DJUI_HALIGN_LEFT, DJUI_VALIGN_TOP);
-    djui_base_set_color(&hint->base, 150, 150, 150, 255);
-    djui_base_set_size_type(&hint->base, DJUI_SVT_RELATIVE, DJUI_SVT_ABSOLUTE);
-    djui_base_set_size(&hint->base, 1.0f, 64);
-    djui_base_compute_tree(&hint->base);
-    u16 lines = djui_text_count_lines(hint, 8);
-
-    // djui_text_render() derives its maxLines from
-    //   floor(comp.height / (font->lineHeight * fontScale))
-    // and lineHeight is 1.0 for every menu font, so one line *is* fontScale
-    // units of height. Anything less would clip the last line: the older menu
-    // texts use 32 * 0.8125 * lines + 8, which is a legacy 26px pitch and only
-    // survives one line. Cover the wrapped lines exactly, plus 4px of air.
-    djui_base_set_size(&hint->base, 1.0f, fontScale * lines + 4);
-}
-
 static bool sChineseTextUnavailable = false;
 static void djui_panel_misc_chinese_text_create(struct DjuiBase* body) {
     struct DjuiCheckbox* checkbox = djui_checkbox_create(body, DLANG(MISC, CHINESE_TEXT_PACK),
@@ -117,17 +85,9 @@ static void djui_panel_misc_chinese_text_create(struct DjuiBase* body) {
         return;
     }
 
-    // Two different reasons can grey this box out, and they need two different
-    // sentences: no cartridge ("put the dump in the folder") and a romhack
-    // ("not applicable here"). Both mean the same thing to the code -- the pack
-    // is off whatever the stored value says -- so the mirror below is shared.
     sChineseTextUnavailable = false;
     checkbox->value = &sChineseTextUnavailable;
     djui_base_set_enabled(&checkbox->base, false);
-
-    djui_panel_misc_chinese_text_hint(body, gCnTextPackRomhack
-        ? DLANG(MISC, CHINESE_TEXT_PACK_ROMHACK)
-        : DLANG(MISC, CHINESE_TEXT_PACK_NO_ROM));
 }
 #endif
 

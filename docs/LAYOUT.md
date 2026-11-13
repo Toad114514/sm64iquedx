@@ -120,7 +120,10 @@ scripts/apply_patches.sh <pc|android|android-cn> <上游干净 checkout> [--fron
 ## 可选补丁：0007-djui-frontend.patch
 
 只改 `src/pc/djui/djui_panel_misc.c`，在「设置 → 其他」里加一个「中文字库（神游）」复选框，运行时切换并持久化。
-**不应用它时功能照常可用，只是要改 `config.ini` 里的 `chinese_text` / `chinese_text_prompted` 来切换**（README 中的 UIPatch 就是它）。
+**不应用它时功能照常可用，只是要改 `config.ini` 里的 `chinese_text` 来切换**（README 中的 UIPatch 就是它）。
+`config.ini` 只存这一个键：能不能开由启动时判定（神游 dump 在不在、有没有加载 romhack），
+判定不过就把面板里的复选框置灰，但**不回写** `chinese_text`——否则没插卡带跑一次就会
+把玩家的选择悄悄翻成 `false`。
 
 拆分边界是一条硬约束，别顺手扩大：
 
@@ -313,7 +316,7 @@ sh platform/windows/mkexe.sh --check                  # 只探测 ISCC 在不在
 
 ## 现状（快照，以 git log 为准）
 
-- `src/` 26 个文件：Makefile、text/define_{courses,text}.inc.c、`src/game|menu|pc` 下 23 个（含 `rom_checker.h`）。**`lang/English.ini` 不在其中**：它的改动只有两条字符串，由 `scripts/add_lang_strings.sh` 在应用时插入，脚本对基线跑一次即得到与实验工作区逐字节相同的文件。
+- `src/` 28 个文件：Makefile、text/define_{courses,text}.inc.c、`src/game|menu|pc` 下 25 个（含 `rom_checker.h`、`mods.c`、`djui_hud_utils.c`）。**`lang/English.ini` 不在其中**：它的改动只有两条字符串，由 `scripts/add_lang_strings.sh` 在应用时插入，脚本对基线跑一次即得到与实验工作区逐字节相同的文件。
 - `patches/cn_extra/` 15 个上游不存在的文件：`cn_font`、`cn_tex`、`cn_rom_assets`、`cn_text_gate.h`、`cn_data/*.h`、`cn_intro_data.c`、`text/cn_*.inc.c`、`src/pc/rom_checker_ique.cpp`、`lang/Chinese.ini`；均已用 `git cat-file -e 8cd6e59:<path>` 确认上游不存在，且与实验工作区逐字节一致。**不再收录 `src/pc/djui/cn_glyphs.h`**（djui_modern 的硬依赖）：那份表只有汉化上游自带，等 djui_modern 上游自己兼容，见 `patches/README.md`。
 - 补丁是 8 个平铺文件：`0001-build-and-config.patch`(3) / `0002-rom-assets.patch`(4) / `0003-text-core.patch`(6) / `0004-dialog.patch`(5) / `0005-menus.patch`(5) / `0006-asset-overlay.patch`(2) 必选共用，`0007-djui-frontend.patch`(3) 可选，`0008-android.patch`(3) 仅两个 Android 目标（共用一份）。共 28 个已改文件，一组一个文件、互不重叠；都不含任何 `lang/*.ini`，`configfile.c` 的中文配置项由 `scripts/add_cn_config.sh` 插。
 - 校验：`8cd6e59` + `0001`~`0007` + `cn_extra/` + `add_lang_strings.sh` 与 `src/` 逐字节一致（28 个已改文件全中，含 `Makefile`），`lang/English.ini` 与实验工作区一致；两个 Android 上游（`0001`~`0006` + 共享 `0008-android.patch` + `0007-djui-frontend.patch` + 两个插入脚本）应用后与三方合并终态各 29 文件逐字节一致；三套基线首次应用 + 幂等复跑均通过；`cn_extra` 15/15 一致，无冲突标记残留。

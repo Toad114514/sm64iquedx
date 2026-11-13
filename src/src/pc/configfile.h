@@ -165,16 +165,11 @@ extern bool         configMenuRandom;
 extern bool         configMenuDemos;
 extern bool         configDisablePopups;
 extern char         configLanguage[MAX_CONFIG_STRING];
-// Chinese (iQue) text pack: when true the in-game dialog and course/act name
-// tables use the Simplified-Chinese data compiled from the official iQue
-// sources. When false the vanilla US text is used instead.
+// Chinese (iQue) text pack. This is the player's wish, i.e. only the position of
+// the settings checkbox; it is *not* the live state. Whether the pack can
+// actually run is decided by cn_text_pack_target() (cn_text_gate.h): the iQue
+// dump has to be there and no enabled mod may replace the game's own data.
 extern bool         configChineseText;
-// Legacy: true once the old first-run confirmation box had been answered. Now
-// it only records that the automatic (rom-detection) decision has been taken.
-extern bool         configChineseTextPrompted;
-// The player changed the Chinese text switch by hand in the DJUI. From then on
-// rom detection must not overrule it, in either direction.
-extern bool         configChineseTextUserSet;
 extern bool         configForce4By3;
 extern bool         configDynosLocalPlayerModelOnly;
 extern unsigned int configPvpType;

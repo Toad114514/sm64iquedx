@@ -488,11 +488,11 @@ cp "$cfg/src/pc/configfile.c" "$C/cfgprobe.orig"
 
 cfg_rc_a=0; cfg_run "$cfg" >/dev/null 2>&1 || cfg_rc_a=$?
 if [ "$cfg_rc_a" -eq 0 ] \
-   && [ "$(grep -c 'configChineseText' "$cfg/src/pc/configfile.c")" -eq 6 ] \
+   && [ "$(grep -c 'configChineseText' "$cfg/src/pc/configfile.c")" -eq 2 ] \
    && [ "$(grep -n 'configLanguage\[MAX_CONFIG_STRING\]' "$cfg/src/pc/configfile.c" | cut -d: -f1)" = 1 ] \
    && [ "$(grep -n 'configChineseText                    = true' "$cfg/src/pc/configfile.c" | cut -d: -f1)" = 2 ] \
-   && [ "$(grep -n '{.name = "chinese_text"' "$cfg/src/pc/configfile.c" | cut -d: -f1)" = 7 ] \
-   && [ "$(grep -n '{.name = "force_4by3"' "$cfg/src/pc/configfile.c" | cut -d: -f1)" = 10 ]; then
+   && [ "$(grep -n '{.name = "chinese_text"' "$cfg/src/pc/configfile.c" | cut -d: -f1)" = 5 ] \
+   && [ "$(grep -n '{.name = "force_4by3"' "$cfg/src/pc/configfile.c" | cut -d: -f1)" = 6 ]; then
     ok "add_cn_config：声明插在 configLanguage 之后、表项插在 force_4by3 之前"
 else
     no "add_cn_config：插入位置不对（rc=${cfg_rc_a}）→ $(sed -n '1,12p' "$cfg/src/pc/configfile.c" | tr '\n' '|')"

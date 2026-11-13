@@ -77,42 +77,33 @@
  
 --- a/src/pc/configfile.c
 +++ b/src/pc/configfile.c
-@@ -219,6 +219,9 @@
+@@ -219,6 +219,7 @@
  bool         configMenuDemos                      = false;
  bool         configDisablePopups                  = false;
  char         configLanguage[MAX_CONFIG_STRING]    = "";
 +bool         configChineseText                    = true;
-+bool         configChineseTextPrompted            = false;
-+bool         configChineseTextUserSet             = false;
  bool         configForce4By3                      = false;
  bool         configDynosLocalPlayerModelOnly      = false;
  unsigned int configPvpType                        = PLAYER_PVP_CLASSIC;
-@@ -383,6 +386,9 @@
+@@ -383,6 +384,7 @@
      // {.name = "coop_menu_demos",                .type = CONFIG_TYPE_BOOL,   .boolValue   = &configMenuDemos},
      {.name = "disable_popups",                 .type = CONFIG_TYPE_BOOL,   .boolValue   = &configDisablePopups},
      {.name = "language",                       .type = CONFIG_TYPE_STRING, .stringValue = (char*)&configLanguage, .maxStringLength = MAX_CONFIG_STRING},
 +    {.name = "chinese_text",                   .type = CONFIG_TYPE_BOOL,   .boolValue   = &configChineseText},
-+    {.name = "chinese_text_prompted",          .type = CONFIG_TYPE_BOOL,   .boolValue   = &configChineseTextPrompted},
-+    {.name = "chinese_text_user_set",          .type = CONFIG_TYPE_BOOL,   .boolValue   = &configChineseTextUserSet},
      {.name = "force_4by3",                     .type = CONFIG_TYPE_BOOL,   .boolValue   = &configForce4By3},
      {.name = "dynos_local_player_model_only",  .type = CONFIG_TYPE_BOOL,   .boolValue   = &configDynosLocalPlayerModelOnly},
      // CoopNet settings
 --- a/src/pc/configfile.h
 +++ b/src/pc/configfile.h
-@@ -165,6 +165,16 @@
+@@ -165,6 +165,11 @@
  extern bool         configMenuDemos;
  extern bool         configDisablePopups;
  extern char         configLanguage[MAX_CONFIG_STRING];
-+// Chinese (iQue) text pack: when true the in-game dialog and course/act name
-+// tables use the Simplified-Chinese data compiled from the official iQue
-+// sources. When false the vanilla US text is used instead.
++// Chinese (iQue) text pack. This is the player's wish, i.e. only the position of
++// the settings checkbox; it is *not* the live state. Whether the pack can
++// actually run is decided by cn_text_pack_target() (cn_text_gate.h): the iQue
++// dump has to be there and no enabled mod may replace the game's own data.
 +extern bool         configChineseText;
-+// Legacy: true once the old first-run confirmation box had been answered. Now
-+// it only records that the automatic (rom-detection) decision has been taken.
-+extern bool         configChineseTextPrompted;
-+// The player changed the Chinese text switch by hand in the DJUI. From then on
-+// rom detection must not overrule it, in either direction.
-+extern bool         configChineseTextUserSet;
  extern bool         configForce4By3;
  extern bool         configDynosLocalPlayerModelOnly;
  extern unsigned int configPvpType;

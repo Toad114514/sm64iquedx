@@ -213,7 +213,6 @@ void rom_assets_load(void) {
     // startup path later just finds it already done.
     bool const packData = cn_rom_assets_ready() || cn_rom_assets_load(rom_checker_ique_rom_path());
     cn_tex_on_rom_loaded(cn_text_pack_target(packData,
-                                             configChineseTextUserSet,
                                              configChineseText,
                                              // Mods are not known yet on this thread
                                              // (mods_init() runs later), so this is

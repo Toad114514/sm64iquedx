@@ -220,8 +220,6 @@ bool         configMenuDemos                      = false;
 bool         configDisablePopups                  = false;
 char         configLanguage[MAX_CONFIG_STRING]    = "";
 bool         configChineseText                    = true;
-bool         configChineseTextPrompted            = false;
-bool         configChineseTextUserSet             = false;
 bool         configForce4By3                      = false;
 bool         configDynosLocalPlayerModelOnly      = false;
 unsigned int configPvpType                        = PLAYER_PVP_CLASSIC;
@@ -387,8 +385,6 @@ static const struct ConfigOption options[] = {
     {.name = "disable_popups",                 .type = CONFIG_TYPE_BOOL,   .boolValue   = &configDisablePopups},
     {.name = "language",                       .type = CONFIG_TYPE_STRING, .stringValue = (char*)&configLanguage, .maxStringLength = MAX_CONFIG_STRING},
     {.name = "chinese_text",                   .type = CONFIG_TYPE_BOOL,   .boolValue   = &configChineseText},
-    {.name = "chinese_text_prompted",          .type = CONFIG_TYPE_BOOL,   .boolValue   = &configChineseTextPrompted},
-    {.name = "chinese_text_user_set",          .type = CONFIG_TYPE_BOOL,   .boolValue   = &configChineseTextUserSet},
     {.name = "force_4by3",                     .type = CONFIG_TYPE_BOOL,   .boolValue   = &configForce4By3},
     {.name = "dynos_local_player_model_only",  .type = CONFIG_TYPE_BOOL,   .boolValue   = &configDynosLocalPlayerModelOnly},
     // CoopNet settings
