@@ -40,6 +40,7 @@
 #include "menu/ingame_text.h"
 #include "pc/dialog_table.h"
 #include "cn_font.h"
+#include "cn_unicode.h"
 
 // CN-aware course/act name lookups. Declared in ingame_menu.h (star_select.c
 // needs them too) and defined further down in this file.
@@ -75,6 +76,47 @@ static bool sDialogLayoutCn = false;
 #else
 #define CN_DIALOG_LAYOUT() false
 #endif
+
+// ---------------------------------------------------------------------------
+// One char walker for every renderer in this file
+// ---------------------------------------------------------------------------
+//
+// UTF-8 strings (everything the pack installs, and anything a mod writes in
+// Chinese) go through cn_read_char(). Vanilla strings keep their single-byte
+// encoding and are wrapped in the same struct so the callers below have one
+// shape to deal with:
+//
+//   CnChar.kind == CN_CHAR_LEGACY -> `code` is the raw vanilla font index
+//   CnChar.kind == CN_CHAR_NARROW -> `ascii` is a printable character
+//
+// The two are unified by the callers: NARROW is converted to a font index with
+// cn_ascii_to_dialog_char(), which is what makes a mixed "English 中文" string
+// work without knowing in advance what it is.
+static CnChar cn_walk_char(const u8 *str, s32 pos, bool cn) {
+    CnChar ch;
+
+    if (cn) { return cn_read_char(str, pos); }
+
+    ch.code = str[pos];
+    ch.ascii = 0;
+    ch.length = 1;
+    if (str[pos] == DIALOG_CHAR_TERMINATOR) {
+        ch.kind = CN_CHAR_END;
+    } else if (str[pos] == DIALOG_CHAR_NEWLINE) {
+        ch.kind = CN_CHAR_NEWLINE;
+    } else {
+        ch.kind = CN_CHAR_LEGACY;
+    }
+    return ch;
+}
+
+// The font index a caller should hand to render_generic_char() /
+// gDialogCharWidths[] for anything that is not a full-width glyph.
+static u8 cn_walk_font_index(const CnChar *ch) {
+    if (ch->kind == CN_CHAR_NARROW) { return cn_ascii_to_dialog_char(ch->ascii); }
+    if (ch->kind == CN_CHAR_MISSING) { return cn_ascii_to_dialog_char('?'); }
+    return (u8) ch->code;
+}
 
 u16 gDialogColorFadeTimer;
 s8 gLastDialogLineNum;
@@ -495,58 +537,28 @@ f32 get_generic_dialog_width(u8* dialog) {
     f32 width = 0;
     u8* d = dialog;
     s32 pos = 0;
-    // The CN-ness cannot change during the walk, and cn_is_cn_string() is a
-    // table scan (it now also walks tokens). Hoist it out of the loop.
+    // The encoding cannot change during the walk, and cn_is_cn_string() is a
+    // table scan. Hoist it out of the loop.
     bool cn = cn_is_cn_string(d);
 
-    // Token-wise walk: a CN glyph is two bytes and CN control tokens also
-    // start with 0xFF, so the byte-wise `*d != TERMINATOR` test would stop at
-    // the first CN newline (0xFF 0xFE). Iteration is capped so a vanilla
-    // buffer can never drive this off the end of its array.
+    // Iteration is capped so a malformed buffer can never drive this off the
+    // end of its array.
     for (s32 cap = 0; cap < 4096; cap++) {
-        CnToken tok = cn_read_token(d, pos, cn);
+        CnChar ch = cn_walk_char(d, pos, cn);
 
-        if (tok.kind == CN_TOKEN_END) {
+        if (ch.kind == CN_CHAR_END) {
             break;
         }
 
-        if (tok.kind == CN_TOKEN_NEWLINE || (!tok.kind && d[pos] == DIALOG_CHAR_NEWLINE)) {
+        if (ch.kind == CN_CHAR_NEWLINE) {
             width = 0;
-            pos += tok.kind ? tok.length : 1;
+            pos += ch.length;
             continue;
         }
 
-        if (tok.kind == CN_TOKEN_SPACE) {
-            // A CN full-width space advances the cursor but is not visible.
-            width += (f32)gDialogCharWidths[DIALOG_CHAR_SPACE];
-            largestWidth = MAX(width, largestWidth);
-            pos += tok.length;
-            continue;
-        }
-
-        if (tok.kind == CN_TOKEN_GLYPH) {
-            // Two-byte CN glyph: one full-width advance, not two byte widths.
-            width += cn_char_width(tok.code);
-            largestWidth = MAX(width, largestWidth);
-            pos += tok.length;
-            continue;
-        }
-
-        // CN_TOKEN_NONE: a vanilla single-byte font code (e.g. the 0xFA star
-        // icon). Fall through to the byte-wise handling below.
-        if (d[pos] == DIALOG_CHAR_TERMINATOR) {
-            break;
-        }
-
-        if (d[pos] == DIALOG_CHAR_NEWLINE) {
-            width = 0;
-            pos++;
-            continue;
-        }
-
-        width += (f32)gDialogCharWidths[d[pos]];
+        width += cn_char_width_of(&ch, gDialogCharWidths);
         largestWidth = MAX(width, largestWidth);
-        pos++;
+        pos += ch.length;
     }
 
     return largestWidth;
@@ -566,30 +578,16 @@ f32 get_generic_dialog_height(u8* dialog) {
     s32 pos = 0;
     bool cn = cn_is_cn_string(d);
 
-    // Token-wise: count CN newlines (0xFF 0xFE) as well as vanilla 0xFE.
-    // Iteration capped as above.
     for (s32 cap = 0; cap < 4096; cap++) {
-        CnToken tok = cn_read_token(d, pos, cn);
+        CnChar ch = cn_walk_char(d, pos, cn);
 
-        if (tok.kind == CN_TOKEN_END) {
+        if (ch.kind == CN_CHAR_END) {
             break;
         }
-        if (tok.kind == CN_TOKEN_NEWLINE) {
-            lines++;
-            pos += tok.length;
-            continue;
-        }
-        if (tok.kind) {
-            pos += tok.length;
-            continue;
-        }
-        if (d[pos] == DIALOG_CHAR_TERMINATOR) {
-            break;
-        }
-        if (d[pos] == DIALOG_CHAR_NEWLINE) {
+        if (ch.kind == CN_CHAR_NEWLINE) {
             lines++;
         }
-        pos++;
+        pos += ch.length;
     }
     return lines * 14;
 }
@@ -639,7 +637,7 @@ void print_generic_string(s16 x, s16 y, const u8 *str) {
     create_dl_translation_matrix(MENU_MTX_PUSH, x, y, 0.0f);
 #endif
 
-    // NOTE: the loop test cannot be `str[strPos] != DIALOG_CHAR_TERMINATOR`
+    // NOTE: the loop test cannot be `chCode != DIALOG_CHAR_TERMINATOR`
     // when CN text is in play: every CN control token starts with 0xFF, so a
     // CN newline (0xFF 0xFE) or space (0xFF 0x9E) would look like the end of
     // the string. The CN branch below decodes the full two-byte token and only
@@ -650,13 +648,14 @@ void print_generic_string(s16 x, s16 y, const u8 *str) {
     // 0xFF 0x00 as a glyph and never find 0xFF 0xFF, running off the end of the
     // array. The cap turns that into a truncated string instead of a segfault.
     for (s32 strCap = 0; strCap < 4096; strCap++) {
-        CnToken cnTok = cn_read_token(str, strPos, cn);
+        CnChar ch = cn_walk_char(str, strPos, cn);
+        u8 chCode;
 
-        if (cnTok.kind == CN_TOKEN_END) {
+        if (ch.kind == CN_CHAR_END) {
             break;
         }
 
-        if (cnTok.kind == CN_TOKEN_NEWLINE) {
+        if (ch.kind == CN_CHAR_NEWLINE) {
 #ifdef VERSION_EU
             yCoord += 16;
             xCoord = x;
@@ -664,47 +663,33 @@ void print_generic_string(s16 x, s16 y, const u8 *str) {
 #else
             // Same re-anchor the vanilla 0xFE case does below: on non-EU the
             // cursor is the modelview matrix, so a newline has to pop the
-            // current line and push a fresh one a line lower. Without this the
-            // CN newline was simply swallowed and a whole multi-line CN string
-            // (e.g. Peach's letter, DIALOG_020) ran off the right edge.
+            // current line and push a fresh one a line lower.
             //
             // The CN step is 18px, not MAX_STRING_WIDTH (16): a CN cell is
             // CN_GLYPH_H (16) tall and is drawn *upwards* from the cursor, so
             // 16 would butt each line against the one above it. 18 is what the
-            // iQue build uses for its own newline (VERSION_CN's
-            // MAX_STRING_WIDTH in n64decomp-cn src/game/ingame_menu.c).
+            // iQue build uses for its own newline.
             gSPPopMatrix(gDisplayListHead++, G_MTX_MODELVIEW);
             create_dl_translation_matrix(MENU_MTX_PUSH, x, y - (lineNum * CN_LINE_STEP), 0.0f);
             lineNum++;
 #endif
-            strPos += cnTok.length;
+            strPos += ch.length;
             continue;
         }
 
-        if (cnTok.kind == CN_TOKEN_SPACE) {
-#ifdef VERSION_EU
-            xCoord += 5;
-#else
-            create_dl_translation_matrix(MENU_MTX_NOPUSH, (f32)(gDialogCharWidths[DIALOG_CHAR_SPACE]), 0.0f, 0.0f);
-#endif
-            strPos += cnTok.length;
+        if (ch.kind == CN_CHAR_WIDE) {
+            render_cn_char(ch.code);
+            create_dl_translation_matrix(MENU_MTX_NOPUSH, cn_char_width(ch.code), 0.0f, 0.0f);
+            strPos += ch.length;
             continue;
         }
 
-        if (cnTok.kind == CN_TOKEN_GLYPH) {
-            render_cn_char(cnTok.code);
-            create_dl_translation_matrix(MENU_MTX_NOPUSH, cn_char_width(cnTok.code), 0.0f, 0.0f);
-            strPos += cnTok.length;
-            continue;
-        }
+        // Everything else is a single-byte glyph: ASCII (converted to a font
+        // index), a legacy LUT code, or '?' for a character the atlas lacks.
+        chCode = cn_walk_font_index(&ch);
+        strPos += ch.length;
 
-        // Not a CN token: fall through to the vanilla single-byte handling.
-        // Re-check the terminator here because the loop test no longer does.
-        if (str[strPos] == DIALOG_CHAR_TERMINATOR) {
-            break;
-        }
-
-        switch (str[strPos]) {
+        switch (chCode) {
 #ifdef VERSION_EU
             case DIALOG_CHAR_SPACE:
                 xCoord += 5;
@@ -717,41 +702,41 @@ void print_generic_string(s16 x, s16 y, const u8 *str) {
             case DIALOG_CHAR_LOWER_A_GRAVE:
             case DIALOG_CHAR_LOWER_A_CIRCUMFLEX:
             case DIALOG_CHAR_LOWER_A_UMLAUT:
-                render_lowercase_diacritic(&xCoord, &yCoord, ASCII_TO_DIALOG('a'), str[strPos] & 0xF);
+                render_lowercase_diacritic(&xCoord, &yCoord, ASCII_TO_DIALOG('a'), chCode & 0xF);
                 break;
             case DIALOG_CHAR_UPPER_A_UMLAUT: // @bug grave and circumflex (0x64-0x65) are absent here
-                render_uppercase_diacritic(&xCoord, &yCoord, ASCII_TO_DIALOG('A'), str[strPos] & 0xF);
+                render_uppercase_diacritic(&xCoord, &yCoord, ASCII_TO_DIALOG('A'), chCode & 0xF);
                 break;
             case DIALOG_CHAR_LOWER_E_GRAVE:
             case DIALOG_CHAR_LOWER_E_CIRCUMFLEX:
             case DIALOG_CHAR_LOWER_E_UMLAUT:
             case DIALOG_CHAR_LOWER_E_ACUTE:
-                render_lowercase_diacritic(&xCoord, &yCoord, ASCII_TO_DIALOG('e'), str[strPos] & 0xF);
+                render_lowercase_diacritic(&xCoord, &yCoord, ASCII_TO_DIALOG('e'), chCode & 0xF);
                 break;
             case DIALOG_CHAR_UPPER_E_GRAVE:
             case DIALOG_CHAR_UPPER_E_CIRCUMFLEX:
             case DIALOG_CHAR_UPPER_E_UMLAUT:
             case DIALOG_CHAR_UPPER_E_ACUTE:
-                render_uppercase_diacritic(&xCoord, &yCoord, ASCII_TO_DIALOG('E'), str[strPos] & 0xF);
+                render_uppercase_diacritic(&xCoord, &yCoord, ASCII_TO_DIALOG('E'), chCode & 0xF);
                 break;
             case DIALOG_CHAR_LOWER_U_GRAVE:
             case DIALOG_CHAR_LOWER_U_CIRCUMFLEX:
             case DIALOG_CHAR_LOWER_U_UMLAUT:
-                render_lowercase_diacritic(&xCoord, &yCoord, ASCII_TO_DIALOG('u'), str[strPos] & 0xF);
+                render_lowercase_diacritic(&xCoord, &yCoord, ASCII_TO_DIALOG('u'), chCode & 0xF);
                 break;
             case DIALOG_CHAR_UPPER_U_UMLAUT: // @bug grave and circumflex (0x84-0x85) are absent here
-                render_uppercase_diacritic(&xCoord, &yCoord, ASCII_TO_DIALOG('U'), str[strPos] & 0xF);
+                render_uppercase_diacritic(&xCoord, &yCoord, ASCII_TO_DIALOG('U'), chCode & 0xF);
                 break;
             case DIALOG_CHAR_LOWER_O_CIRCUMFLEX:
             case DIALOG_CHAR_LOWER_O_UMLAUT:
-                render_lowercase_diacritic(&xCoord, &yCoord, ASCII_TO_DIALOG('o'), str[strPos] & 0xF);
+                render_lowercase_diacritic(&xCoord, &yCoord, ASCII_TO_DIALOG('o'), chCode & 0xF);
                 break;
             case DIALOG_CHAR_UPPER_O_UMLAUT: // @bug circumflex (0x95) is absent here
-                render_uppercase_diacritic(&xCoord, &yCoord, ASCII_TO_DIALOG('O'), str[strPos] & 0xF);
+                render_uppercase_diacritic(&xCoord, &yCoord, ASCII_TO_DIALOG('O'), chCode & 0xF);
                 break;
             case DIALOG_CHAR_LOWER_I_CIRCUMFLEX:
             case DIALOG_CHAR_LOWER_I_UMLAUT:
-                render_lowercase_diacritic(&xCoord, &yCoord, DIALOG_CHAR_I_NO_DIA, str[strPos] & 0xF);
+                render_lowercase_diacritic(&xCoord, &yCoord, DIALOG_CHAR_I_NO_DIA, chCode & 0xF);
                 break;
 #else // i.e. not EU
             case DIALOG_CHAR_DAKUTEN:
@@ -806,11 +791,11 @@ void print_generic_string(s16 x, s16 y, const u8 *str) {
                 break; // ? needed to match
             default:
 #ifdef VERSION_EU
-                render_generic_char_at_pos(xCoord, yCoord, str[strPos]);
-                xCoord += gDialogCharWidths[str[strPos]];
+                render_generic_char_at_pos(xCoord, yCoord, chCode);
+                xCoord += gDialogCharWidths[chCode];
                 break;
 #else
-                render_generic_char(str[strPos]);
+                render_generic_char(chCode);
                 if (mark != DIALOG_MARK_NONE) {
                     create_dl_translation_matrix(MENU_MTX_PUSH, 5.0f, 5.0f, 0.0f);
                     render_generic_char(mark + 0xEF);
@@ -821,13 +806,13 @@ void print_generic_string(s16 x, s16 y, const u8 *str) {
 #if defined(VERSION_JP) || defined(VERSION_SH)
                 create_dl_translation_matrix(MENU_MTX_NOPUSH, 10.0f, 0.0f, 0.0f);
 #else
-                create_dl_translation_matrix(MENU_MTX_NOPUSH, (f32)(gDialogCharWidths[str[strPos]]), 0.0f, 0.0f);
+                create_dl_translation_matrix(MENU_MTX_NOPUSH, (f32)(gDialogCharWidths[chCode]), 0.0f, 0.0f);
                 break; // what an odd difference. US added a useless break here.
 #endif
 #endif
         }
 
-        strPos++;
+        // strPos already advanced by ch.length above.
     }
 
 #ifndef VERSION_EU
@@ -836,8 +821,7 @@ void print_generic_string(s16 x, s16 y, const u8 *str) {
 }
 
 #ifdef VERSION_EU
-void print_hud_char_umlaut(s16 x, s16 y, u8 chr) {
-    void **fontLUT = segmented_to_virtual(main_hud_lut);
+void print_hud_char_umlaut(s16 x, s16 y, u8 chr) {    void **fontLUT = segmented_to_virtual(main_hud_lut);
 
     gDPPipeSync(gDisplayListHead++);
     gDPSetTextureImage(gDisplayListHead++, G_IM_FMT_RGBA, G_IM_SIZ_16b, 1, fontLUT[chr]);
@@ -1026,85 +1010,52 @@ void print_menu_generic_string(s16 x, s16 y, const u8 *str) {
     // The iteration count is capped so a vanilla buffer can never be walked off
     // the end of its array.
     for (s32 cap = 0; cap < 1024; cap++) {
-        if (cn) {
-            CnToken cnTok = cn_read_token(str, strPos, true);
+        CnChar ch = cn_walk_char(str, strPos, cn);
+        u8 chCode;
 
-            if (cnTok.kind == CN_TOKEN_END) {
-                break;
-            }
-            if (cnTok.kind == CN_TOKEN_NEWLINE) {
-                strPos += cnTok.length;
-                continue;
-            }
-            if (cnTok.kind == CN_TOKEN_SPACE) {
-                curX += 4;
-                strPos += cnTok.length;
-                continue;
-            }
-            if (cnTok.kind == CN_TOKEN_GLYPH) {
-                // A CJK cell is 16px tall and is drawn from curY downwards, but a
-                // vanilla menu glyph is only 8px and is also anchored at curY.
-                // Inside a CN string the two therefore disagree by 4px: the
-                // digit in "冰雪中的8枚红色硬币" sat on the top edge of the line
-                // instead of its middle. Shift the 8px glyphs down by half the
-                // difference so mixed strings share one baseline.
-                u32 glyphY = cn ? (curY + 4) : curY;
-
-                if (cn_glyph_is_vanilla(cnTok.code)) {
-                    // 0x00xx is bit-identical to a menu-font index (digits,
-                    // A-Z, arrows). Draw it from the menu LUT rather than via
-                    // render_cn_char(), which would use the dialog font and so
-                    // change the glyph's look mid-string.
-                    u8 c = cn_glyph_vanilla_byte(cnTok.code);
-                    if (tileDirty) {
-                        restore_menu_ia8_text_tile();
-                        tileDirty = false;
-                    }
-                    gDPSetTextureImage(gDisplayListHead++, G_IM_FMT_IA, G_IM_SIZ_8b, 1, fontLUT[c]);
-                    gDPLoadSync(gDisplayListHead++);
-                    gDPLoadBlock(gDisplayListHead++, G_TX_LOADTILE, 0, 0, 8 * 8 - 1, CALC_DXT(8, G_IM_SIZ_8b_BYTES));
-                    gSPTextureRectangle(gDisplayListHead++, curX << 2, glyphY << 2,
-                                        (curX + 8) << 2, (glyphY + 8) << 2,
-                                        G_TX_RENDERTILE, 0, 0, 1 << 10, 1 << 10);
-                    curX += gDialogCharWidths[c];
-                } else {
-                    // CJK: a 16x16 cell drawn as a plain rectangle, exactly
-                    // like the vanilla branches below. Do NOT push a matrix and
-                    // reuse render_cn_char() -- see cn_draw_glyph_rect().
-                    cn_draw_glyph_rect(curX, curY, cnTok.code);
-                    tileDirty = true;
-                    curX += (u32) cn_char_width(cnTok.code);
-                }
-                strPos += cnTok.length;
-                continue;
-            }
-            // CN_TOKEN_NONE: a vanilla LUT byte embedded in a CN string (the
-            // 0xFA/0xFD star icons). Fall through to the vanilla path below.
-        }
-
-        // Re-check the terminator here, because the loop test no longer does.
-        if (str[strPos] == DIALOG_CHAR_TERMINATOR) {
+        if (ch.kind == CN_CHAR_END) {
             break;
         }
+        if (ch.kind == CN_CHAR_NEWLINE) {
+            strPos += ch.length;
+            continue;
+        }
+        if (ch.kind == CN_CHAR_WIDE) {
+            // A CJK cell is 16px tall and is drawn from curY downwards.
+            //
+            // CJK: a 16x16 cell drawn as a plain rectangle, exactly like the
+            // vanilla branches below. Do NOT push a matrix and reuse
+            // render_cn_char() -- see cn_draw_glyph_rect().
+            cn_draw_glyph_rect(curX, curY, ch.code);
+            tileDirty = true;
+            curX += (u32) cn_char_width(ch.code);
+            strPos += ch.length;
+            continue;
+        }
+
+        // A single-byte glyph: ASCII (converted to a menu-font index), a
+        // legacy LUT code, or '?' when the atlas has no glyph for the char.
+        chCode = cn_walk_font_index(&ch);
+        strPos += ch.length;
 
         if (tileDirty) {
             restore_menu_ia8_text_tile();
             tileDirty = false;
         }
 
-        switch (str[strPos]) {
+        switch (chCode) {
 #ifdef VERSION_EU
             case DIALOG_CHAR_UPPER_A_UMLAUT:
                 print_menu_char_umlaut(curX, curY, ASCII_TO_DIALOG('A'));
-                curX += gDialogCharWidths[str[strPos]];
+                curX += gDialogCharWidths[chCode];
                 break;
             case DIALOG_CHAR_UPPER_U_UMLAUT:
                 print_menu_char_umlaut(curX, curY, ASCII_TO_DIALOG('U'));
-                curX += gDialogCharWidths[str[strPos]];
+                curX += gDialogCharWidths[chCode];
                 break;
             case DIALOG_CHAR_UPPER_O_UMLAUT:
                 print_menu_char_umlaut(curX, curY, ASCII_TO_DIALOG('O'));
-                curX += gDialogCharWidths[str[strPos]];
+                curX += gDialogCharWidths[chCode];
                 break;
 #else
             case DIALOG_CHAR_DAKUTEN:
@@ -1120,7 +1071,7 @@ void print_menu_generic_string(s16 x, s16 y, const u8 *str) {
             default:
                 // Same half-line correction as the CN-glyph branch above: an
                 // 8px vanilla glyph inside a 16px CN line sits 4px high.
-                gDPSetTextureImage(gDisplayListHead++, G_IM_FMT_IA, G_IM_SIZ_8b, 1, fontLUT[str[strPos]]);
+                gDPSetTextureImage(gDisplayListHead++, G_IM_FMT_IA, G_IM_SIZ_8b, 1, fontLUT[chCode]);
                 gDPLoadSync(gDisplayListHead++);
                 gDPLoadBlock(gDisplayListHead++, G_TX_LOADTILE, 0, 0, 8 * 8 - 1, CALC_DXT(8, G_IM_SIZ_8b_BYTES));
                 gSPTextureRectangle(gDisplayListHead++, curX << 2, (curY + (cn ? 4 : 0)) << 2, (curX + 8) << 2,
@@ -1140,11 +1091,100 @@ void print_menu_generic_string(s16 x, s16 y, const u8 *str) {
 #if defined(VERSION_JP) || defined(VERSION_SH)
                 curX += 9;
 #else
-                curX += gDialogCharWidths[str[strPos]];
+                curX += gDialogCharWidths[chCode];
 #endif
         }
-        strPos++;
+        // strPos already advanced by ch.length above.
     }
+}
+
+// print_menu_generic_string() for a list that cannot fit a 16px CN cell.
+//
+// The file-select score table prints 17 rows 12px apart, and the vanilla 8px
+// menu glyph fits that grid with room to spare. A CN glyph is 16x16, so at full
+// size every name overlaps the row below it. The official iQue build answered
+// that by splitting the list into two pages of eight; this port keeps the
+// one-page layout and draws the name into a 12px cell instead.
+//
+// Scope is deliberately narrow: it only takes over when the string actually
+// contains a CJK glyph, so vanilla names, English mod names and the score
+// numbers keep the exact path they had. The " 1 " decoration in front of a CN
+// course name is skipped -- in a fixed-order list the position already says
+// which course it is, and a 12px row has no room for it.
+void print_menu_generic_string_compact(s16 x, s16 y, const u8 *str, s16 cell) {
+    s32 strPos = 0;
+    s32 curX = x;
+    bool cn = cn_is_cn_string(str);
+    bool drewCjk = false;
+    // A CJK cell reprograms G_TX_RENDERTILE for a 16x16 IA8 tile; a vanilla 8x8
+    // glyph drawn afterwards needs the menu tile back first, exactly like
+    // print_menu_generic_string(). A local is enough here because the tail of
+    // this function always restores the tile for whoever draws next.
+    bool tileDirty = false;
+
+    if (!cn) {
+        print_menu_generic_string(x, y, str);
+        return;
+    }
+
+    // One pass to decide: a CN buffer with no CJK in it (a mod's English name,
+    // which is registered as UTF-8 all the same) must go through the normal
+    // path rather than lose its letters here.
+    for (s32 cap = 0; cap < 256; cap++) {
+        CnChar probe = cn_read_char(str, strPos);
+
+        if (probe.kind == CN_CHAR_END) { break; }
+        if (probe.kind == CN_CHAR_WIDE) { drewCjk = true; break; }
+        strPos += probe.length;
+    }
+    if (!drewCjk) {
+        print_menu_generic_string(x, y, str);
+        return;
+    }
+
+    strPos = 0;
+    for (s32 cap = 0; cap < 256; cap++) {
+        CnChar ch = cn_read_char(str, strPos);
+
+        if (ch.kind == CN_CHAR_END) { break; }
+        strPos += ch.length;
+
+        if (ch.kind == CN_CHAR_WIDE) {
+            cn_draw_glyph_rect_scaled(curX, y, ch.code, cell);
+            tileDirty = true;
+            curX += cell;
+        } else if (ch.kind == CN_CHAR_NARROW && ch.ascii == ' ') {
+            curX += cell / 2;
+        } else {
+            // A vanilla 8x8 glyph: an ASCII letter or digit, or a legacy LUT
+            // code such as a bold button. Draw it for real. An earlier revision
+            // only advanced the cursor here, so a name like "马里奥 64" kept the
+            // CJK and silently lost the digits. Native 8x8 size (the row is 12px
+            // and the CJK cells are already scaled down), vertically centred,
+            // with the same half-cell advance the CJK line gives a narrow glyph.
+            u8 chCode = cn_walk_font_index(&ch);
+            s32 gy = y + ((cell > 8) ? (cell - 8) / 2 : 0);
+            void **fontLUT = segmented_to_virtual(menu_font_lut);
+
+            if (tileDirty) {
+                restore_menu_ia8_text_tile();
+                tileDirty = false;
+            }
+            gDPSetTextureImage(gDisplayListHead++, G_IM_FMT_IA, G_IM_SIZ_8b, 1, fontLUT[chCode]);
+            gDPLoadSync(gDisplayListHead++);
+            gDPLoadBlock(gDisplayListHead++, G_TX_LOADTILE, 0, 0, 8 * 8 - 1, CALC_DXT(8, G_IM_SIZ_8b_BYTES));
+            gSPTextureRectangle(gDisplayListHead++, curX << 2, gy << 2, (curX + 8) << 2, (gy + 8) << 2,
+                                G_TX_RENDERTILE, 0, 0, 1 << 10, 1 << 10);
+            curX += 8;
+        }
+        // Newlines are impossible in a one-line list row.
+    }
+
+    // A CJK cell was the last thing written, and it reprogrammed
+    // G_TX_RENDERTILE for a 16x16 IA8 tile. The rows printed after this one
+    // start with a fresh texture load, but the score column next to the name is
+    // 8x8 -- leave the tile the way the vanilla path expects.
+    restore_menu_ia8_text_tile();
 }
 
 void print_credits_string(s16 x, s16 y, const u8 *str) {
@@ -1248,39 +1288,19 @@ s16 get_str_x_pos_from_center(s16 centerPos, u8 *str, UNUSED f32 scale) {
     f32 spacesWidth = 0.0f;
     bool cn = cn_is_cn_string(str);
 
-    // Token-wise: CN glyphs are two-byte and full-width, and CN control tokens
-    // begin with 0xFF, so a byte-wise terminator test would stop early.
-    // Iteration capped so a vanilla buffer cannot run off its array.
+    // Iteration capped so a malformed buffer cannot run off its array.
     for (s32 cap = 0; cap < 4096; cap++) {
-        CnToken tok = cn_read_token(str, strPos, cn);
+        CnChar ch = cn_walk_char(str, strPos, cn);
 
-        if (tok.kind == CN_TOKEN_END) {
+        if (ch.kind == CN_CHAR_END) {
             break;
         }
-        if (tok.kind == CN_TOKEN_NEWLINE) {
-            strPos += tok.length;
+        if (ch.kind == CN_CHAR_NEWLINE) {
+            strPos += ch.length;
             continue;
         }
-        if (tok.kind == CN_TOKEN_SPACE) {
-            spacesWidth += (f32)gDialogCharWidths[DIALOG_CHAR_SPACE];
-            strPos += tok.length;
-            continue;
-        }
-        if (tok.kind == CN_TOKEN_GLYPH) {
-            spacesWidth += cn_char_width(tok.code);
-            strPos += tok.length;
-            continue;
-        }
-        // CN_TOKEN_NONE: vanilla byte, handled below.
-        if (str[strPos] == DIALOG_CHAR_TERMINATOR) {
-            break;
-        }
-        if (str[strPos] == DIALOG_CHAR_NEWLINE) {
-            strPos++;
-            continue;
-        }
-        spacesWidth += (f32)gDialogCharWidths[str[strPos]];
-        strPos++;
+        spacesWidth += cn_char_width_of(&ch, gDialogCharWidths);
+        strPos += ch.length;
     }
     // return the x position of where the string starts as half the string's
     // length from the position of the provided center.
@@ -1316,28 +1336,19 @@ s16 get_string_width(u8 *str) {
     s16 width = 0;
     bool cn = cn_is_cn_string(str);
 
-    // Token-wise walk; see get_str_x_pos_from_center for the rationale.
     // Iteration capped for the same reason.
     for (s32 cap = 0; cap < 4096; cap++) {
-        CnToken tok = cn_read_token(str, strPos, cn);
+        CnChar ch = cn_walk_char(str, strPos, cn);
 
-        if (tok.kind == CN_TOKEN_END) {
+        if (ch.kind == CN_CHAR_END) {
             break;
         }
-        if (tok.kind) {
-            if (tok.kind == CN_TOKEN_GLYPH) {
-                width += (s16)cn_char_width(tok.code);
-            } else if (tok.kind == CN_TOKEN_SPACE) {
-                width += gDialogCharWidths[DIALOG_CHAR_SPACE];
-            }
-            strPos += tok.length;
+        if (ch.kind == CN_CHAR_NEWLINE) {
+            strPos += ch.length;
             continue;
         }
-        if (str[strPos] == DIALOG_CHAR_TERMINATOR) {
-            break;
-        }
-        width += gDialogCharWidths[str[strPos]];
-        strPos++;
+        width += (s16) cn_char_width_of(&ch, gDialogCharWidths);
+        strPos += ch.length;
     }
     return width;
 }
@@ -1474,26 +1485,18 @@ bool handle_dialog_hook(s32 dialogId) {
     free(sOverrideDialogHookString);
     sOverrideDialogHookString = NULL;
 
-    // An override from a mod cannot be shown together with the pack.
+    // A mod's override is honoured as-is, including one written in Chinese.
     //
-    // The pack renders its own table (dialog_table_get_render), and that table
-    // holds the translation of the *vanilla* dialog. Arbitrary mod text has no
-    // Chinese image, so there is nothing to merge: accept either the mod's
-    // English or the pack's Chinese, and while the pack is on it is the pack.
-    // This is also what keeps a mod that round-trips DialogEntry.text alive:
-    // Character Select reads the US string (which is *not* what is on screen),
-    // optionally gsubs it, and hands it back -- installing that here would
-    // paint English over the Chinese text.
+    // It used to be dropped while the pack was on, because the pack drew its
+    // own table and installing mod text over it would have painted English with
+    // Chinese spacing. There is one table and one renderer now: the override
+    // simply becomes the string that is drawn, and the UTF-8 walker deals with
+    // whatever mix of languages it contains.
     //
-    // Two things stay untouched: `openDialogBox = false` above (the API for
-    // "show nothing at all") and custom dialogs (id >= DIALOG_COUNT), which the
-    // pack does not cover, so dialog_table_render_is_cn() is false for them.
-    if (dialogTextOverride != NULL && dialog_table_render_is_cn(dialogId)) {
-        dialogTextOverride = NULL;
-    }
-
+    // `openDialogBox = false` above still wins (that is the API for "show
+    // nothing at all"), and a NULL override means "keep the current text".
     if (dialogTextOverride != NULL) {
-        sOverrideDialogHookString = convert_string_ascii_to_sm64(NULL, dialogTextOverride, false);
+        sOverrideDialogHookString = cn_text_from_utf8(dialogTextOverride);
     } else {
         sOverrideDialogHookString = NULL;
     }
@@ -1971,67 +1974,56 @@ void handle_dialog_text_and_pages(s8 colorMode, struct DialogEntry *dialog, s8 l
 #endif
 
     while (pageState == DIALOG_PAGE_STATE_NONE) {
+        CnChar ch;
+
         change_and_flash_dialog_text_color_lines(colorMode, lineNum);
-        strChar = str ? str[strIdx] : DIALOG_CHAR_TERMINATOR;
+        ch = cn_walk_char(str, strIdx, cn);
 
-        // Chinese (iQue/CN) tokens. Every CN token is two bytes and the
-        // control tokens all start with 0xFF, which the vanilla switch below
-        // would immediately treat as DIALOG_CHAR_TERMINATOR. Handle the whole
-        // CN token stream here, before the vanilla single-byte switch, so
-        // 0xFF 0xFE (newline) and 0xFF 0x9E (space) behave correctly and only
-        // 0xFF 0xFF ends the string.
-        {
-            CnToken cnTok = cn_read_token(str, strIdx, cn);
-
-            if (cnTok.kind == CN_TOKEN_END) {
-                pageState = DIALOG_PAGE_STATE_END;
+        // A full-width glyph is drawn here and never reaches the switch below:
+        // the switch indexes the single-byte font tables, and a 16x16 CJK cell
+        // has its own quad and its own tile setup.
+        if (ch.kind == CN_CHAR_END) {
+            pageState = DIALOG_PAGE_STATE_END;
 #ifndef VERSION_EU
-                gSPPopMatrix(gDisplayListHead++, G_MTX_MODELVIEW);
+            gSPPopMatrix(gDisplayListHead++, G_MTX_MODELVIEW);
 #endif
-                break;
-            }
-
-            if (cnTok.kind == CN_TOKEN_NEWLINE) {
-                lineNum++;
-#ifdef VERSION_EU
-                handle_dialog_scroll_page_state(lineNum, totalLines, &pageState, &xMatrix);
-                gDialogX = 0;
-#else
-                handle_dialog_scroll_page_state(lineNum, totalLines, &pageState, &xMatrix, &linePos);
-#endif
-                strIdx += cnTok.length;
-                continue;
-            }
-
-            if (cnTok.kind == CN_TOKEN_SPACE) {
-                // Mirror the vanilla DIALOG_CHAR_SPACE case: batch the space
-                // into xMatrix and flush it before the next visible glyph.
-#ifdef VERSION_EU
-                gDialogX += gDialogCharWidths[DIALOG_CHAR_SPACE];
-#else
-                xMatrix++;
-                linePos++;
-#endif
-                strIdx += cnTok.length;
-                continue;
-            }
-
-            if (cnTok.kind == CN_TOKEN_GLYPH) {
-                if (lineNum >= lowerBound && lineNum <= lowerBound + linesPerBox) {
-                    if (linePos || xMatrix != 1) {
-                        create_dl_translation_matrix(
-                            MENU_MTX_NOPUSH, (f32)(gDialogCharWidths[DIALOG_CHAR_SPACE] * (xMatrix - 1)), 0, 0);
-                    }
-
-                    render_cn_char(cnTok.code);
-                    create_dl_translation_matrix(MENU_MTX_NOPUSH, cn_char_width(cnTok.code), 0, 0);
-                    xMatrix = 1;
-                    linePos++;
-                }
-                strIdx += cnTok.length;
-                continue;
-            }
+            break;
         }
+
+        if (ch.kind == CN_CHAR_NEWLINE) {
+            lineNum++;
+#ifdef VERSION_EU
+            handle_dialog_scroll_page_state(lineNum, totalLines, &pageState, &xMatrix);
+            gDialogX = 0;
+#else
+            handle_dialog_scroll_page_state(lineNum, totalLines, &pageState, &xMatrix, &linePos);
+#endif
+            strIdx += ch.length;
+            continue;
+        }
+
+        if (ch.kind == CN_CHAR_WIDE) {
+            if (lineNum >= lowerBound && lineNum <= lowerBound + linesPerBox) {
+                if (linePos || xMatrix != 1) {
+                    create_dl_translation_matrix(
+                        MENU_MTX_NOPUSH, (f32)(gDialogCharWidths[DIALOG_CHAR_SPACE] * (xMatrix - 1)), 0, 0);
+                }
+
+                render_cn_char(ch.code);
+                create_dl_translation_matrix(MENU_MTX_NOPUSH, cn_char_width(ch.code), 0, 0);
+                xMatrix = 1;
+                linePos++;
+            }
+            strIdx += ch.length;
+            continue;
+        }
+
+        // A single-byte glyph: ASCII converted to a dialog font index, a legacy
+        // LUT code, or '?' when the atlas has no glyph for the character. From
+        // here on it is an ordinary dialog character and the vanilla switch
+        // applies unchanged.
+        strChar = ch.kind == CN_CHAR_END ? DIALOG_CHAR_TERMINATOR : cn_walk_font_index(&ch);
+        strIdx += ch.length;
 
         switch (strChar) {
             case DIALOG_CHAR_TERMINATOR:
@@ -2233,7 +2225,7 @@ void handle_dialog_text_and_pages(s8 colorMode, struct DialogEntry *dialog, s8 l
         }
 #endif
 
-        strIdx++;
+        // strIdx already advanced by ch.length above.
     }
     gSPDisplayList(gDisplayListHead++, dl_ia_text_end);
 
@@ -2447,7 +2439,7 @@ void render_dialog_entries(void) {
 #if defined(VERSION_US) || defined(VERSION_SH)
     s8 lowerBound = 0;
 #endif
-    struct DialogEntry *dialog = dialog_table_get_render(gDialogID);
+    struct DialogEntry *dialog = dialog_table_get(gDialogID);
 
     if (dialog == NULL) {
         gDialogID = DIALOG_NONE;
@@ -2794,7 +2786,7 @@ void do_cutscene_handler(void) {
 void print_peach_letter_message(void) {
     // Same source as the dialog box: this prints the letter's dialog string, so
     // it has to follow the pack table too rather than the US one.
-    struct DialogEntry *dialog = dialog_table_get_render(gDialogID);
+    struct DialogEntry *dialog = dialog_table_get(gDialogID);
 
     const u8* str = sOverrideDialogHookString != NULL ? sOverrideDialogHookString : dialog->str;
 
@@ -3574,55 +3566,68 @@ void render_pause_castle_main_strings(s16 x, s16 y) {
 // only understand the vanilla single-byte font. CN course names came back as
 // spaces or raw bytes, which is why vanilla-looking glyphs kept showing up.
 // Strips the decoration the official iQue course names carry at their front:
-// U+3000, the full-width course number, U+3000 -- i.e. "　１　炸弹王国".
+// the vanilla 3-byte [colour][num][0x9E] prefix, then the iQue "　１　" --
+// spaces and the course number -- in front of the name itself.
 //
-// `name + 3` only removes the vanilla 3-byte [colour][num][0x9E] prefix that the
-// generator emits, so the CN decoration survives it. That is harmless where the
-// name is drawn centred on its own (the star-select header), but the pause menu
-// lays the line out at fixed X positions and *already* prints the course number
-// of its own, so leaving it in put the number on screen twice and pushed the
-// name off its column.
+// Since names are UTF-8 (see src/game/cn_unicode.h) both halves of that
+// decoration have collapsed to plain ASCII: `FF 9E 00 01 FF 9E` became
+// " 1 ", i.e. a run of spaces, a run of digits and another run of spaces. So
+// the strip is a character scan, not a token walk -- the iQue-byte version of
+// this function silently stopped matching the moment the loader started
+// emitting UTF-8, and every screen that prints the course number of its own
+// (the pause header, the course-clear banner) drew it twice.
 //
-// Only the leading run is removed, and only when it matches the exact pattern,
-// so a name that legitimately begins with a space keeps it.
+// ★ There are TWO decorations in the buffer, not one. build_names() in
+// cn_rom_assets.c synthesizes a " N " prefix, and the cartridge's own names
+// already start with [FF 9E][00 0N][FF 9E], which converts to a second " N ".
+// So the buffer reads " 2 " + " 2 " + "嘘嘘要塞". A single pass removed one
+// layer and left the second, which is why the pause header read "关卡 2 2
+// 嘘嘘要塞" (2026-11-14). The loop below peels every layer, and the pass count
+// is bounded so a malformed name cannot spin.
+//
+// It takes the *base* pointer, so it removes the decoration of a name that
+// still carries its prefix. Callers that already added +3 get their string
+// back unchanged, because a bare name has no leading digits.
 const u8 *cn_strip_course_name_decoration(const u8 *name) {
+    const u8 *p = name;
+    s32 pass;
+
     if (name == NULL || !cn_is_cn_string(name)) {
         return name;
     }
 
-    // Drop the vanilla 3-byte [colour][num][0x9E] prefix the generator emits.
-    const u8 *p = name + 3;
-    const u8 *const fallback = p;
+    for (pass = 0; pass < 4; pass++) {
+        const u8 *digits;
+        const u8 *afterDigits;
 
-    // The decoration is a run of U+3000, then the course number, then another
-    // run of U+3000. Neither the number nor the space run has a fixed width:
-    // courses 10-15 encode "10".."15" as two ASCII tokens, and the secret-star
-    // slots have no number at all, just three U+3000. So consume tokens, not
-    // bytes.
-    //
-    // Note 0x00 0x00 is the digit '0' (iQue encodes full-width and half-width
-    // digits identically), NOT a terminator -- the only terminator is 0xFF 0xFF.
-    // Course 10 ("　１０　雪人王国") relies on this, so the number loop must not
-    // treat a zero byte as end-of-string. Bound it instead, so a name that is
-    // somehow all-digits cannot walk off the buffer.
-    while (p[0] == DIALOG_CHAR_TERMINATOR && p[1] == DIALOG_CHAR_SPACE) {
-        p += 2;
-    }
-    for (int guard = 0; guard < 4 && p[0] == 0x00; guard++) {
-        p += 2;
-    }
+        while (*p == ' ') {
+            p++;
+        }
 
-    // Trailing U+3000 run. Requiring at least one space is what distinguishes a
-    // decorated name from a bare one; if there is none, keep the prefix so the
-    // caller still draws the whole string.
-    if (!(p[0] == DIALOG_CHAR_TERMINATOR && p[1] == DIALOG_CHAR_SPACE)) {
-        return fallback;
-    }
+        digits = p;
+        while (*p >= '0' && *p <= '9') {
+            p++;
+        }
 
-    // Drop the whole trailing run, not just one space: the secret-star slots
-    // indent with three U+3000 and would otherwise keep two of them.
-    while (p[0] == DIALOG_CHAR_TERMINATOR && p[1] == DIALOG_CHAR_SPACE) {
-        p += 2;
+        if (p == digits) {
+            // No number at this layer: the spaces we just skipped are the whole
+            // decoration (the secret-star slots indent with spaces only). Return
+            // the start of the text rather than `name + 3` -- three bytes into a
+            // UTF-8 string can land in the middle of a character.
+            break;
+        }
+
+        afterDigits = p;
+        while (*p == ' ') {
+            p++;
+        }
+
+        // Require the trailing run: a name that merely starts with a digit
+        // ("10 Coins Star" style) must not lose it.
+        if (p == afterDigits) {
+            p = digits;
+            break;
+        }
     }
 
     return p;
@@ -3687,35 +3692,20 @@ static void render_pause_castle_course_name(const u8 *courseName, s16 x, s16 y) 
     s16 width = 0;
     bool cn = cn_is_cn_string(courseName);
 #ifndef VERSION_JP
-    // Token-wise walk so two-byte CN glyphs are measured once each and the
-    // course name is centred correctly. A byte-wise walk would also stop early
-    // on a CN newline.
+    // Walk characters so a 16px CJK cell is measured once, and so a mixed
+    // "Course 3 雪人王国" string gets one width per character.
     {
         s32 pos = 0;
         for (s32 cap = 0; cap < 1024; cap++) {
-            CnToken tok = cn_read_token(courseName, pos, cn);
+            CnChar ch = cn_walk_char(courseName, pos, cn);
 
-            if (tok.kind == CN_TOKEN_END) {
+            if (ch.kind == CN_CHAR_END) {
                 break;
             }
-            if (tok.kind) {
-                if (tok.kind == CN_TOKEN_GLYPH) {
-                    width += (s16)cn_char_width(tok.code);
-                } else if (tok.kind == CN_TOKEN_SPACE) {
-                    width += gDialogCharWidths[DIALOG_CHAR_SPACE];
-                }
-                pos += tok.length;
-                continue;
+            if (ch.kind != CN_CHAR_NEWLINE) {
+                width += (s16) cn_char_width_of(&ch, gDialogCharWidths);
             }
-            // Vanilla single-byte path. gDialogCharWidths has 256 entries, so
-            // the byte index is always in range, but the string still has to
-            // terminate: a CN buffer reached via this path would never hit
-            // 0xFF, hence the iteration cap above.
-            if (courseName[pos] == DIALOG_CHAR_TERMINATOR) {
-                break;
-            }
-            width += gDialogCharWidths[courseName[pos]];
-            pos++;
+            pos += ch.length;
         }
     }
 #endif

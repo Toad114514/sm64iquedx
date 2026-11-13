@@ -47,7 +47,47 @@
  #include "pc/lua/utils/smlua_level_utils.h"
  #include "pc/lua/utils/smlua_text_utils.h"
  
-@@ -177,10 +178,13 @@
+@@ -162,6 +163,20 @@
+     return strAscii + 1;
+ }
+ 
++// One character at a time, for the UTF-8 text walker (cn_unicode.c). The
++// multi-character entries in sSm64CharMap ("the", "you", ")(", ...) cannot
++// match a one-character buffer, which is exactly right: the walker draws
++// character by character, so those combinations are not available.
++u8 ascii_char_to_sm64(char c, bool menu) {
++    char buf[2];
++    u8 out;
++
++    buf[0] = c;
++    buf[1] = '\0';
++    ascii_to_sm64_char(&out, buf, menu);
++    return out;
++}
++
+ static char *sm64_to_ascii_char(char *strAscii, u8 c) {
+     for (u32 i = 0; i < ARRAY_COUNT(sSm64CharMap); ++i) {
+         const struct Sm64Char *ch = &sSm64CharMap[i];
+@@ -174,13 +189,32 @@
+     return strAscii + 1;
+ }
+ 
++// One font byte -> its text, terminated. The mapping without the policy.
++//
++// cn_unicode.c decodes the *bytes of a cartridge string*, not an engine string,
++// so it must not go through convert_string_sm64_to_ascii(): that one now asks
++// cn_is_cn_string() whether the buffer is Chinese, and the answer is computed
++// by walking back through cn_label_get() -> cn_ique_to_utf8() -> here. The
++// first UI label that got drawn blew the stack (SI_KERNEL SEGV, 2026-11-14).
++// It is also simply cheaper: one table scan per byte instead of the four
++// pointer-range scans the "is it CN?" test does.
++//
++// `out` must hold at least SM64_TO_ASCII_MAX_CHAR_SIZE + 1 bytes.
++char *sm64_char_to_ascii(char *out, u8 c) {
++    *sm64_to_ascii_char(out, c) = '\0';
++    return out;
++}
++
  u8 *convert_string_ascii_to_sm64(u8 *str64, const char *strAscii, bool menu) {
      if (!strAscii) { return str64; }
  
@@ -62,7 +102,7 @@
          if (!str64) {
              return NULL;
          }
-@@ -194,6 +198,22 @@
+@@ -194,6 +228,22 @@
      }
      *(str64End++) = 0xFF;
  
@@ -85,7 +125,7 @@
      // resize string if it was allocated by this function
      if (shouldResizeString) {
          u8 *resizedStr64 = realloc(str64, (size_t) (str64End - str64));
-@@ -211,9 +231,60 @@
+@@ -211,9 +261,60 @@
      return (size_t) (str64 - str64Begin);
  }
  
@@ -146,7 +186,7 @@
      // allocate string with maximum size
      bool shouldResizeString = false;
      if (!strAscii) {
-@@ -361,7 +432,18 @@
+@@ -361,7 +462,18 @@
  
      else if (!hasCustomName) {
          if (courseNum >= COURSE_MIN && courseNum < COURSE_MAX) {
@@ -166,7 +206,7 @@
              const u8 *courseName = segmented_to_virtual(courseNameTbl[courseNum - COURSE_BOB]);
              convert_string_sm64_to_ascii(output, courseName + 3);
              charCase = MIN(charCase, 0); // Don't need to capitalize vanilla course names
-@@ -428,7 +510,10 @@
+@@ -428,7 +540,10 @@
      // Main courses: BOB to RR
      else if (COURSE_IS_MAIN_COURSE(courseNum)) {
          if (starIndex >= 0 && starIndex < MAX_ACTS) {
@@ -178,6 +218,55 @@
              const u8 *starName = segmented_to_virtual(actNameTable[(courseNum - COURSE_BOB) * MAX_ACTS + starIndex]);
              convert_string_sm64_to_ascii(output, starName);
              charCase = MIN(charCase, 0); // Don't need to capitalize vanilla act names
+--- a/src/game/level_info.h
++++ b/src/game/level_info.h
+@@ -10,6 +10,21 @@
+ u8 *convert_string_ascii_to_sm64(u8 *str64, const char *strAscii, bool menu);
+ char *convert_string_sm64_to_ascii(char *strAscii, const u8 *str64);
+ /* |description|
++Convert one single-byte font code to the text it stands for, NUL-terminated.
++The mapping without the "is this a CN buffer?" policy: used by the UTF-8 decoder
++(cn_unicode.c), which is decoding bytes of a cartridge string and cannot call
++convert_string_sm64_to_ascii() without recursing back into itself.
++`out` must hold at least SM64_TO_ASCII_MAX_CHAR_SIZE + 1 bytes.
++|descriptionEnd| */
++char *sm64_char_to_ascii(char *out, u8 c);
++/* |description|
++Convert one printable ASCII character to the engine's single-byte dialog font
++index (the value render_generic_char() and gDialogCharWidths[] expect).
++Unknown characters fall back to the space glyph. Used by the UTF-8 text walker,
++which sees plain ASCII and has to feed the vanilla renderer.
++|descriptionEnd| */
++u8 ascii_char_to_sm64(char c, bool menu);
++/* |description|
+ Returns the name of the level corresponding to `courseNum`, `levelNum` and `areaIndex` as an ASCII (human readable) string.
+ Set `charCase` to 1 to capitalize or -1 to decapitalize the returned string
+ |descriptionEnd| */
+--- a/src/game/level_update.c
++++ b/src/game/level_update.c
+@@ -21,6 +21,7 @@
+ #include "bettercamera.h"
+ #include "object_list_processor.h"
+ #include "ingame_menu.h"
++#include "segment2.h"
+ #include "obj_behaviors.h"
+ #include "object_helpers.h"
+ #include "save_file.h"
+@@ -1890,6 +1891,14 @@
+     }
+     smlua_call_event_hooks(HOOK_ON_LEVEL_INIT, sWarpDest.type, sWarpDest.levelNum, sWarpDest.areaIdx, sWarpDest.nodeId, sWarpDest.arg);
+ 
++#if defined(SM64COOPDX_CN_TEXT)
++    // The only place the Chinese text tables are swapped: entering a level (or
++    // a room within it) is when the player expects the text to change. Flipping
++    // the settings checkbox in the pause menu no longer repaints the dialog
++    // that is currently open.
++    chinese_text_pack_on_level_load();
++#endif
++
+     // clear texture 1 on level init -- can linger and corrupt textures otherwise
+     extern u8 gGfxPcResetTex1;
+     gGfxPcResetTex1 = 1;
 --- a/src/game/print.c
 +++ b/src/game/print.c
 @@ -6,6 +6,7 @@
@@ -220,7 +309,7 @@
              if (glyphIndex != GLYPH_SPACE) {
 --- a/src/game/segment2.h
 +++ b/src/game/segment2.h
-@@ -9,6 +9,17 @@
+@@ -9,6 +9,20 @@
  extern u8* seg2_course_name_table_original[];
  extern u8* seg2_act_name_table[];
  extern u8* seg2_act_name_table_original[];
@@ -231,9 +320,12 @@
 +extern u8 gCnTextPackActive;
 +// Repoint every dialog entry and course/act name slot at the active pack.
 +void apply_cn_text_pack(void);
-+// Runtime switch used by the MISC settings checkbox: flips the pack, re-applies
-+// the tables and persists configChineseText.
++// Runtime switch used by the MISC settings checkbox. Records the choice and
++// swaps the localised textures; the text tables are swapped at level load.
 +void chinese_text_pack_set_active(bool active);
++// Swap the dialog / course / act tables according to the current choice.
++// Called from level_init() -- the only place the tables change.
++void chinese_text_pack_on_level_load(void);
 +#endif
  extern const Gfx dl_rgba16_text_begin[];
  extern const Gfx dl_rgba16_text_end[];
@@ -325,7 +417,7 @@
 +#undef CASTLE_SECRET_STARS
 --- a/text/define_text.inc.c
 +++ b/text/define_text.inc.c
-@@ -1,12 +1,63 @@
+@@ -1,12 +1,58 @@
  // == dialog ==
  // (defines en_dialog_table etc.)
  
@@ -365,13 +457,8 @@
  #undef DEFINE_DIALOG
 +
 +#if defined(SM64COOPDX_CN_TEXT)
-+// Registry of every CN dialog buffer, so cn_is_cn_string() can tell "this
-+// pointer is CN text" without having to reach into the dialog entries (which
-+// change at runtime via apply_cn_text_pack and Lua overrides).
-+//
-+// No longer const / statically initialised: the CN strings are wherever the
-+// loader put them. apply_cn_text_pack() fills this before anything is drawn.
-+const u8 *cn_dialog_registry[256];
++// The iQue dialog strings are no longer compiled in: they are read from the
++// player's cartridge and converted to UTF-8 by src/game/cn_rom_assets.c.
 +#endif
 +
 +#undef DEFINE_DIALOG
@@ -389,7 +476,7 @@
  #define DEFINE_DIALOG(id, unused, linesPerBox, leftOffset, width, _) \
      static const struct DialogEntry dialog_entry_orig_ ## id = { \
          unused, linesPerBox, leftOffset, width, dialog_text_ ## id, NULL, false \
-@@ -15,6 +66,12 @@
+@@ -15,6 +61,12 @@
  #include "dialogs.h"
  
  #undef DEFINE_DIALOG
@@ -402,7 +489,7 @@
  #define DEFINE_DIALOG(id, _1, _2, _3, _4, _5) &dialog_entry_orig_ ## id,
  
  const struct DialogEntry *const seg2_dialog_original[] = {
-@@ -35,6 +92,19 @@
+@@ -35,6 +87,11 @@
  // == acts ==
  // (defines en_act_name_table etc.)
  
@@ -411,6 +498,14 @@
 +// apply_cn_text_pack() can switch the act-name table at runtime. The macro
 +// args are strings in the CN course source, so the CN path must not use them
 +// as array bounds.
+ #define COURSE_ACTS(id, name, a,b,c,d,e,f) \
+     static u8 act_name_ ## id ## _1[a] = { 0xFF }; \
+     static u8 act_name_ ## id ## _2[b] = { 0xFF }; \
+@@ -42,6 +99,15 @@
+     static u8 act_name_ ## id ## _4[d] = { 0xFF }; \
+     static u8 act_name_ ## id ## _5[e] = { 0xFF }; \
+     static u8 act_name_ ## id ## _6[f] = { 0xFF };
++#else
 +#define COURSE_ACTS(id, name, a,b,c,d,e,f) \
 +    static u8 act_name_ ## id ## _1[a] = { 0xFF }; \
 +    static u8 act_name_ ## id ## _2[b] = { 0xFF }; \
@@ -418,19 +513,11 @@
 +    static u8 act_name_ ## id ## _4[d] = { 0xFF }; \
 +    static u8 act_name_ ## id ## _5[e] = { 0xFF }; \
 +    static u8 act_name_ ## id ## _6[f] = { 0xFF };
-+#else
- #define COURSE_ACTS(id, name, a,b,c,d,e,f) \
-     static u8 act_name_ ## id ## _1[a] = { 0xFF }; \
-     static u8 act_name_ ## id ## _2[b] = { 0xFF }; \
-@@ -42,6 +112,7 @@
-     static u8 act_name_ ## id ## _4[d] = { 0xFF }; \
-     static u8 act_name_ ## id ## _5[e] = { 0xFF }; \
-     static u8 act_name_ ## id ## _6[f] = { 0xFF };
 +#endif
  
  #define SECRET_STAR(id, name)
  #define CASTLE_SECRET_STARS(str)
-@@ -55,20 +126,199 @@
+@@ -55,20 +121,177 @@
  #undef COURSE_ACTS
  #undef EXTRA_TEXT
  
@@ -513,28 +600,6 @@
 +// (hosting or joining a room calls smlua_init() -> smlua_text_utils_reset_all()).
 +// If you ever make these pointers heap-allocated, update that ownership set too.
 +void apply_cn_text_pack(void) {
-+    // Filled below, one per dialog, in dialogs.h order. The array is sized
-+    // generously (256 entries for 170 dialogs) and NULL-terminated so
-+    // cn_is_cn_string() can walk it without needing the count.
-+    u32 cnRegIdx = 0;
-+
-+    // dialogs: fill the registry only.
-+    //
-+    // The strings and page heights are NOT copied out of here any more. They
-+    // live in their own table (src/pc/dialog_table.c), which the renderer picks
-+    // instead of the US table while the pack is on; that is what keeps a mod's
-+    // smlua_replace_dialog() from ever touching Chinese text. What still has to
-+    // happen here is the registry, because cn_is_cn_string() identifies CN text
-+    // by pointer and the pointers come from the rom.
-+#define DEFINE_DIALOG(id, _1, _2, _3, _4, _5) \
-+    cn_dialog_registry[cnRegIdx++] = (u8 *)cn_dialog_ ## id;
-+
-+#include "dialogs.h"
-+
-+    cn_dialog_registry[cnRegIdx] = NULL;
-+
-+#undef DEFINE_DIALOG
-+
 +    // course + act name tables
 +    {
 +        extern u8 *seg2_course_name_table[];
@@ -621,16 +686,16 @@
 +        #undef CN_ACT_SLOTS
 +    }
 +
-+    // The dialog strings live in their own table, so the only thing to do here
-+    // is make sure it is current: apply_cn_text_pack() also runs after the rom
-+    // finishes loading and after every Lua reset (smlua_text_utils_reset_all),
-+    // and refresh is cheap and idempotent.
++    // Dialogs: point the untouched entries at the cartridge's UTF-8 strings
++    // (or back at the ROM when the pack is off). One table, no registry --
++    // cn_is_cn_string() asks the loader for the string pointers directly.
 +    //
 +    // Declared rather than included: this file is textconv'd and included from
 +    // segment2.c, which has no reason to pull in the PC dialog table.
 +    {
-+        extern void dialog_table_refresh_cn(void);
-+        dialog_table_refresh_cn();
++        extern void dialog_table_apply_cn(bool on);
++        extern bool cn_rom_assets_ready(void);
++        dialog_table_apply_cn(gCnTextPackActive && cn_rom_assets_ready());
 +    }
 +}
 +#endif

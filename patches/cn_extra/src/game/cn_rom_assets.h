@@ -81,11 +81,11 @@
 #define CN_ROM_STAGE_COUNT    15
 #define CN_ROM_ACT_MAIN_COUNT (CN_ROM_STAGE_COUNT * 6)
 
-// Scratch space for one name. The longest iQue entry is 30 bytes (an act
-// name), plus the 3-byte vanilla prefix and the double 0xFF terminator the
-// old generated arrays carried -- 35 at worst. Rounded up so a future dump
-// with a slightly longer line still fits.
-#define CN_ROM_NAME_BYTES    40
+// Scratch space for one name, now in UTF-8. The longest iQue entry is 30 bytes
+// (an act name) = 15 CJK glyphs = 45 UTF-8 bytes, plus the 3-byte vanilla
+// prefix, a newline and the terminator. Rounded up so a future dump with a
+// slightly longer line still fits.
+#define CN_ROM_NAME_BYTES    64
 
 // --- Localised textures ----------------------------------------------------
 // The twelve iQue textures that were redrawn *in place*: same segment, same
@@ -140,6 +140,15 @@ const u8 *cn_rom_dialog_str(u32 index);
 // then leave the vanilla pointer in place.
 const u8 *cn_rom_course_name(u32 slot);
 const u8 *cn_rom_act_name(u32 index);
+
+// True when `str` points anywhere inside one of the name buffers above.
+//
+// cn_is_cn_string() used to compare pointers for equality, which quietly broke
+// every caller that walked a name forward -- skipping the " 1 " decoration in
+// front of a course name lands six bytes in, not on the registered base or
+// base+3, and the renderer then treated UTF-8 as vanilla bytes. A containment
+// test is what those callers actually mean.
+bool cn_rom_name_contains(const u8 *str);
 
 // Raw pointer into the decompressed segment, for tables that are used as-is.
 const u8 *cn_rom_seg(u32 offset);

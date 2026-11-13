@@ -37,13 +37,8 @@ extern u32 cn_rom_dialog_lines(u32 index);
 #undef DEFINE_DIALOG
 
 #if defined(SM64COOPDX_CN_TEXT)
-// Registry of every CN dialog buffer, so cn_is_cn_string() can tell "this
-// pointer is CN text" without having to reach into the dialog entries (which
-// change at runtime via apply_cn_text_pack and Lua overrides).
-//
-// No longer const / statically initialised: the CN strings are wherever the
-// loader put them. apply_cn_text_pack() fills this before anything is drawn.
-const u8 *cn_dialog_registry[256];
+// The iQue dialog strings are no longer compiled in: they are read from the
+// player's cartridge and converted to UTF-8 by src/game/cn_rom_assets.c.
 #endif
 
 #undef DEFINE_DIALOG
@@ -201,28 +196,6 @@ const u8* seg2_act_name_table_original[] = {
 // (hosting or joining a room calls smlua_init() -> smlua_text_utils_reset_all()).
 // If you ever make these pointers heap-allocated, update that ownership set too.
 void apply_cn_text_pack(void) {
-    // Filled below, one per dialog, in dialogs.h order. The array is sized
-    // generously (256 entries for 170 dialogs) and NULL-terminated so
-    // cn_is_cn_string() can walk it without needing the count.
-    u32 cnRegIdx = 0;
-
-    // dialogs: fill the registry only.
-    //
-    // The strings and page heights are NOT copied out of here any more. They
-    // live in their own table (src/pc/dialog_table.c), which the renderer picks
-    // instead of the US table while the pack is on; that is what keeps a mod's
-    // smlua_replace_dialog() from ever touching Chinese text. What still has to
-    // happen here is the registry, because cn_is_cn_string() identifies CN text
-    // by pointer and the pointers come from the rom.
-#define DEFINE_DIALOG(id, _1, _2, _3, _4, _5) \
-    cn_dialog_registry[cnRegIdx++] = (u8 *)cn_dialog_ ## id;
-
-#include "dialogs.h"
-
-    cn_dialog_registry[cnRegIdx] = NULL;
-
-#undef DEFINE_DIALOG
-
     // course + act name tables
     {
         extern u8 *seg2_course_name_table[];
@@ -309,16 +282,16 @@ void apply_cn_text_pack(void) {
         #undef CN_ACT_SLOTS
     }
 
-    // The dialog strings live in their own table, so the only thing to do here
-    // is make sure it is current: apply_cn_text_pack() also runs after the rom
-    // finishes loading and after every Lua reset (smlua_text_utils_reset_all),
-    // and refresh is cheap and idempotent.
+    // Dialogs: point the untouched entries at the cartridge's UTF-8 strings
+    // (or back at the ROM when the pack is off). One table, no registry --
+    // cn_is_cn_string() asks the loader for the string pointers directly.
     //
     // Declared rather than included: this file is textconv'd and included from
     // segment2.c, which has no reason to pull in the PC dialog table.
     {
-        extern void dialog_table_refresh_cn(void);
-        dialog_table_refresh_cn();
+        extern void dialog_table_apply_cn(bool on);
+        extern bool cn_rom_assets_ready(void);
+        dialog_table_apply_cn(gCnTextPackActive && cn_rom_assets_ready());
     }
 }
 #endif

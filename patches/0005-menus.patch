@@ -46,7 +46,27 @@
  #if defined(VERSION_JP) || defined(VERSION_SH)
      #define LENGTH 5
  #else
-@@ -2689,15 +2689,15 @@
+@@ -2684,20 +2684,35 @@
+ #include "game/segment7.h"
+ #endif
+ 
++// One course-name cell of the score table.
++//
++// The table is a 12px grid (17 rows, one screen, no scrolling), which is the
++// height of the vanilla 8px menu glyph -- a 16px CN cell would overlap the row
++// below. print_menu_generic_string_compact() draws the same glyph into a 12px
++// square instead, and the " 1 " decoration is dropped because the row order
++// already fixes which course this is. Vanilla names are unaffected.
++static void print_score_file_course_name(s16 x, s16 y, const u8 *name) {
++    if (cn_is_cn_string(name)) {
++        print_menu_generic_string_compact(x, y, cn_strip_course_name_decoration(name), 12);
++    } else {
++        print_menu_generic_string(x, y, name);
++    }
++}
++
+ /**
+  * Prints save file score strings that shows when a save file is chosen inside the score menu.
   */
  void print_save_file_scores(s8 fileIndex) {
  #ifndef VERSION_EU
@@ -66,6 +86,24 @@
      void **levelNameTable = segmented_to_virtual(seg2_course_name_table);
  #endif
  #else
+@@ -2734,7 +2749,7 @@
+ 
+ //! Huge print list, for loops exist for a reason!
+ #define PRINT_COURSE_SCORES(courseIndex, pad) \
+-    print_menu_generic_string(LEVEL_NAME_X + (pad * LEVEL_NUM_PAD), 23 + 12 * courseIndex, \
++    print_score_file_course_name(LEVEL_NAME_X + (pad * LEVEL_NUM_PAD), 23 + 12 * courseIndex, \
+                               segmented_to_virtual(levelNameTable[courseIndex - 1])); \
+     print_score_file_star_score(fileIndex, courseIndex - 1, STAR_SCORE_X, 23 + 12 * courseIndex); \
+     print_score_file_course_coin_score(fileIndex, courseIndex - 1, 213, 23 + 12 * courseIndex);
+@@ -2759,7 +2774,7 @@
+ #undef PRINT_COURSE_SCORES
+ 
+     // Print castle secret stars text
+-    print_menu_generic_string(LEVEL_NAME_X + SECRET_STARS_PAD, 23 + 12 * 16,
++    print_score_file_course_name(LEVEL_NAME_X + SECRET_STARS_PAD, 23 + 12 * 16,
+                               segmented_to_virtual(levelNameTable[25]));
+     // Print castle secret stars score
+     print_score_file_castle_secret_stars(fileIndex, STAR_SCORE_X, 23 + 12 * 16);
 --- a/src/menu/ingame_text.h
 +++ b/src/menu/ingame_text.h
 @@ -1,11 +1,49 @@
@@ -188,7 +226,7 @@
  #include "game/game_init.h"
  #include "game/ingame_menu.h"
  #include "game/level_update.h"
-@@ -279,12 +280,32 @@
+@@ -279,12 +280,36 @@
  #ifdef VERSION_EU
      unsigned char myScore[][10] = { {TEXT_MYSCORE}, {TEXT_MY_SCORE_FR}, {TEXT_MY_SCORE_DE} };
  #else
@@ -209,7 +247,11 @@
 +    // apply_cn_text_pack() has run, so this also follows the runtime toggle.
 +    {
 +        const u8 *cnName = ingame_menu_get_course_name(gCurrCourseNum);
-+        if (cnName != NULL) { currLevelName = cnName; }
++        // Strip the " 1 " decoration: print_course_number() below prints the
++        // course number of its own, and the CN name carries a copy of it (the
++        // vanilla prefix plus the iQue "　１　" both collapse to ASCII once the
++        // name is UTF-8). Leaving it in drew the number twice.
++        if (cnName != NULL) { currLevelName = cn_strip_course_name_decoration(cnName); }
 +    }
 +
      const u8 *selectedActName = get_star_name_sm64(gCurrCourseNum, sSelectedActIndex + 1, 1);
@@ -223,7 +265,7 @@
  #ifndef VERSION_EU
      s16 lvlNameX;
      s16 actNameX;
-@@ -309,16 +330,24 @@
+@@ -309,16 +334,30 @@
  #ifdef VERSION_EU
          print_generic_string(95, 118, myScore[language]);
  #else
@@ -240,18 +282,25 @@
 +        // vanilla name is 8px tall, so lift the line by half the extra height to
 +        // keep it centred on the same spot. The official iQue build makes the
 +        // same correction (it moves this line from y = 33 to y = 30).
-+        s16 lvlNameY = cn_is_cn_string(currLevelName) ? 30 : 33;
++        bool const cnName = cn_is_cn_string(currLevelName);
++        // The CN name was stripped above, so it has no prefix left to skip;
++        // the vanilla one still has its 3 bytes. Chopping three bytes off a
++        // UTF-8 name would eat one whole character.
++        const u8 *levelNameText = cnName ? currLevelName : currLevelName + 3;
++
++        s16 lvlNameY = cnName ? 30 : 33;
  #ifdef VERSION_EU
 -        print_generic_string(get_str_x_pos_from_center(160, (u8*) currLevelName + 3, 10.0f), 33, currLevelName + 3);
-+        print_generic_string(get_str_x_pos_from_center(160, (u8*) currLevelName + 3, 10.0f), lvlNameY, currLevelName + 3);
++        print_generic_string(get_str_x_pos_from_center(160, (u8*) levelNameText, 10.0f), lvlNameY, levelNameText);
  #else
-         lvlNameX = get_str_x_pos_from_center(160, (u8*) currLevelName + 3, 10.0f);
+-        lvlNameX = get_str_x_pos_from_center(160, (u8*) currLevelName + 3, 10.0f);
 -        print_generic_string(lvlNameX, 33, currLevelName + 3);
-+        print_generic_string(lvlNameX, lvlNameY, currLevelName + 3);
++        lvlNameX = get_str_x_pos_from_center(160, (u8*) levelNameText, 10.0f);
++        print_generic_string(lvlNameX, lvlNameY, levelNameText);
  #endif
      }
  
-@@ -335,11 +364,26 @@
+@@ -335,11 +374,26 @@
      gDPSetEnvColor(gDisplayListHead++, 0, 0, 0, 255);
      // Print the name of the selected act.
      if ((gOverrideHideActSelectHud & ACT_SELECT_HUD_ACT_NAME) == 0 && sVisibleStars != 0) {

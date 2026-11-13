@@ -11,22 +11,24 @@ typedef struct GrowingArray DialogTable;
 void dialog_table_init(void);
 struct DialogEntry* dialog_table_alloc(s32 *dialogId);
 
-// The US table: what the Lua text layer reads and writes (smlua_text_utils_*).
-// Never contains Chinese; a mod's replacement lands here and stays here.
+// The one and only table. Lua reads and writes it (smlua_text_utils_*), and
+// the renderer draws it -- there is no second copy of the dialog data, so a
+// mod's replacement and the Chinese pack can no longer disagree about which
+// text belongs to an id.
+//
+// What the pack changes is where `str` points: dialog_table_apply_cn(true)
+// points the untouched entries at the UTF-8 strings converted out of the 神游
+// cartridge, apply_cn(false) points them back at the ROM's own text. Entries a
+// mod replaced are left exactly as the mod left them.
 struct DialogEntry* dialog_table_get(s32 dialogId);
 
-// The table the renderer should draw: the iQue pack's own entries while the
-// pack is on and the rom is loaded, the US table otherwise. Falls back to the
-// US entry for custom dialogs and when the rom is missing.
-struct DialogEntry* dialog_table_get_render(s32 dialogId);
-
-// True when dialog_table_get_render() would return the Chinese entry, i.e. the
-// pack supplies this dialog and a mod's override cannot be merged into it.
-bool dialog_table_render_is_cn(s32 dialogId);
-
-// Rebuild the Chinese table from the loaded rom. Cheap; safe to call when the
-// table or the rom is absent (it then leaves the entries in "no rom" state).
-void dialog_table_refresh_cn(void);
+// Install (or remove) the Chinese text. Idempotent; entries whose dialog id the
+// cartridge does not cover keep their vanilla string. Never touches an entry
+// with `replaced` set, so a mod's text always wins over the pack.
+//
+// Called when a level is loaded, not when the settings checkbox flips -- see
+// chinese_text_pack_set_active() in pc_main.c.
+void dialog_table_apply_cn(bool on);
 
 void dialog_table_reset(void);
 void dialog_table_shutdown(void);

@@ -52,6 +52,7 @@
 #include "ingame_menu.h"
 #include "segment2.h"
 #include "cn_font.h"
+#include "cn_unicode.h"
 #include "pc/djui/djui_font.h"
 
 // Real iQue glyph data, read out of the player's own 神游 rom at startup.
@@ -276,6 +277,32 @@ void cn_draw_glyph_rect(s32 x, s32 y, u16 code) {
                         x << 2, y << 2,
                         (x + CN_GLYPH_W) << 2, (y + CN_GLYPH_H) << 2,
                         G_TX_RENDERTILE, 0, 0, 1 << 10, 1 << 10);
+}
+
+// Same glyph, drawn into an arbitrary square cell instead of the 16px one.
+//
+// The file-select score list lays its rows out 12px apart (17 of them fit on one
+// screen) and a CN cell is 16px tall, so a full-size glyph spills into the row
+// below and the list becomes unreadable. The official iQue build solved it by
+// paginating the list in two; this keeps the layout and shrinks the glyph.
+//
+// The tile stays 16x16 (cn_setup_glyph_tile): only the destination rect and the
+// per-pixel texture step change, so 16 texels are stretched over `cell` pixels.
+void cn_draw_glyph_rect_scaled(s32 x, s32 y, u16 code, s32 cell) {
+    u8 *glyph = cn_font_get_glyph(code);
+
+    if (glyph == NULL || cell <= 0) {
+        return;
+    }
+
+    gDPPipeSync(gDisplayListHead++);
+    gDPSetTextureImage(gDisplayListHead++, G_IM_FMT_IA, G_IM_SIZ_8b, 1, VIRTUAL_TO_PHYSICAL(glyph));
+    cn_setup_glyph_tile();
+    gSPTextureRectangle(gDisplayListHead++,
+                        x << 2, y << 2,
+                        (x + cell) << 2, (y + cell) << 2,
+                        G_TX_RENDERTILE, 0, 0,
+                        (CN_GLYPH_W << 10) / cell, (CN_GLYPH_H << 10) / cell);
 }
 
 f32 cn_char_width(u16 code) {
@@ -525,26 +552,60 @@ s32 cn_draw_hud_pseudo(s32 x, s32 y, u8 code) {
     return 32;
 }
 
+// --- Mod-supplied UTF-8 strings --------------------------------------------
+//
+// A mod's Chinese string is a heap buffer the engine has never seen, so the
+// pointer test above cannot know about it. cn_text_from_utf8() registers every
+// buffer it creates, and the only cost of losing an entry (a very long session
+// replacing thousands of dialogs) is that the string is drawn as vanilla
+// bytes -- never a crash, never a wrong pointer freed.
+#define CN_UTF8_REGISTRY_MAX 512
+static const u8 *sCnUtf8Registry[CN_UTF8_REGISTRY_MAX];
+static u32 sCnUtf8RegistryCount = 0;
+static u32 sCnUtf8RegistryNext = 0;
+
+void cn_register_utf8_string(const u8 *str) {
+    if (str == NULL) { return; }
+
+    if (sCnUtf8RegistryCount < CN_UTF8_REGISTRY_MAX) {
+        sCnUtf8Registry[sCnUtf8RegistryCount++] = str;
+        return;
+    }
+
+    // Full: overwrite the oldest slot. A replacement dialog usually replaces a
+    // previous one, so the ring turns over in the order strings were installed.
+    sCnUtf8Registry[sCnUtf8RegistryNext] = str;
+    sCnUtf8RegistryNext = (sCnUtf8RegistryNext + 1) % CN_UTF8_REGISTRY_MAX;
+}
+
+static bool cn_is_registered_utf8(const u8 *str) {
+    u32 i;
+    for (i = 0; i < sCnUtf8RegistryCount; i++) {
+        if (sCnUtf8Registry[i] == str) { return true; }
+    }
+    return false;
+}
+
 // --- CN string identification -----------------------------------------------
 //
-// The two encodings are byte-for-byte ambiguous (see cn_read_token), so the
-// walkers have to be *told* which one a string uses. Rather than thread a flag
-// through a dozen call sites, we ask the one authoritative question: is this
-// pointer one of the strings the pack installed?
+// Every string the pack installs is UTF-8 (see cn_unicode.h). The renderer
+// needs to know which walker to use, because a vanilla string is still in the
+// engine's single-byte font encoding and must keep its existing path. The
+// question is answered by pointer, not by looking at the bytes -- UTF-8 and the
+// vanilla encoding overlap too much for that to be reliable (vanilla '1' is
+// 0x01, and 0x01 is also a UTF-8 lead byte).
 //
-// There are three sources of CN text:
-//   1. seg2_course_name_table / seg2_act_name_table (course + act names)
-//   2. the dialog entries' ->str            (dialog text)
-//   3. the cn_dialog_registry mirror        (needed because a Lua override or
-//      apply_cn_text_pack() may have swapped ->str out from under us)
+// Three sources of UTF-8 text:
+//   1. the fixed UI labels (cn_label_get converts them on first use)
+//   2. the dialog strings the loader converted out of the cartridge
+//   3. the loader's course/act name buffers (cn_rom_name_contains)
 //
-// Everything else -- HUD strings, stack buffers, LUT icon strings -- is
-// vanilla and must be walked byte-wise.
+// Everything else -- HUD strings, stack buffers, LUT icon strings, and an
+// English dialog a mod wrote -- is vanilla and keeps the byte-wise path.
 bool cn_is_cn_string(const u8 *str) {
 #if defined(SM64COOPDX_CN_TEXT)
-    extern u8 *seg2_course_name_table[];
-    extern u8 *seg2_act_name_table[];
-    extern const u8 *const cn_dialog_registry[];
+    extern const u8 *cn_rom_dialog_str(u32 index);
+    extern u32 cn_rom_dialog_count(void);
     u32 i;
 
     if (str == NULL) { return false; }
@@ -552,78 +613,28 @@ bool cn_is_cn_string(const u8 *str) {
     // Only meaningful when the pack is actually installed.
     if (!gCnTextPackActive) { return false; }
 
+    // A string a mod installed through cn_text_from_utf8().
+    if (cn_is_registered_utf8(str)) { return true; }
+
     // Fixed UI labels first: 22 pointer compares, and they are the most common
-    // CN string on screen (every INGAME_TEXT_COPY() site). The order matters --
-    // the course-name test below has to walk tokens and is the only expensive
-    // one, so everything cheaper gets to short-circuit before it.
-    //
-    // These are shared read-only arrays (so two labels with the same text are
-    // literally the same pointer), which also makes this loop a no-op when the
-    // pack is off -- cn_label_get() then returns NULL and the label stays the
-    // vanilla ROM string.
+    // CN string on screen (every INGAME_TEXT_COPY() site).
     for (i = 0; i < CN_LABEL_COUNT; i++) {
-        if (str == cn_label_table[i]) { return true; }
+        if (str == cn_label_get((CNLabelId) i)) { return true; }
     }
 
-    // Dialogs: the registry holds every CN buffer we ever compiled in, so a
-    // pointer matches even after the live entry has been repointed.
-    for (i = 0; i < 4096 && cn_dialog_registry[i] != NULL; i++) {
-        if (str == cn_dialog_registry[i]) { return true; }
+    // Dialogs. The loader owns one UTF-8 buffer per entry, so this is a flat
+    // scan of at most 170 pointers.
+    for (i = 0; i < cn_rom_dialog_count(); i++) {
+        if (str == cn_rom_dialog_str(i)) { return true; }
     }
 
-    // Act (star) names carry no prefix and are always walked from their base.
-    for (i = 0; i < 260; i++) {
-        const u8 *p = seg2_act_name_table[i];
-        if (p == NULL) { break; }
-        if (str == p) { return true; }
-    }
-
-    // Course names are the one case where the pointer we are handed is NOT the
-    // base of the buffer. The iQue entries are
-    //     [9E][num][9E]  (vanilla 3-byte prefix, other callers pass `+ 3`)
-    //     [FF 9E]        (U+3000)
-    //     [00 nn]...     (full-width course number, 1-2 tokens)
-    //     [FF 9E]        (U+3000)
-    //     <the name>
-    // and cn_strip_course_name_decoration() returns a pointer to <the name>,
-    // i.e. base + 3 + 2k for some k. A plain `== p || == p + 3` test misses
-    // exactly that pointer, so the pause menu fell back to the byte-wise
-    // vanilla walk and drew 炸弹王国's four 0x01 lead bytes as four "1"s -- the
-    // "1111" course name.
-    //
-    // So accept any *token boundary* of a CN course name, found by walking the
-    // token stream from the base. This is exact (every byte inside one of these
-    // arrays genuinely is CN text) and, unlike a length table or a pointer
-    // registry, it needs no generated side data and cannot go stale when
-    // apply_cn_text_pack() re-points the table.
-    //
-    // Two bounds keep it cheap and safe. `q < str` stops as soon as the walk
-    // passes the pointer being tested (q only ever grows), so an unrelated
-    // pointer -- a stack buffer, a HUD string -- costs one comparison per
-    // table slot instead of a full walk. `limit` caps the walk at 32 bytes,
-    // the longest iQue entry (30) rounded up, so a slot that somehow points at
-    // a single-0xFF ROM stub cannot walk past its own array.
-    #define CN_COURSE_SCAN_BYTES 32
-    for (i = 0; i < 26; i++) {
-        const u8 *p = seg2_course_name_table[i];
-        if (p == NULL) { break; }
-        if (str == p) { return true; }
-        // `p + 3` is the form every caller that just wants past the vanilla
-        // prefix uses (star select, the course-clear screen). It has to be
-        // answered here, not left to the walk below.
-        if (str == p + 3) { return true; }
-        if (str < p + 3) { continue; }
-
-        const u8 *q = p + 3;
-        const u8 *const limit = p + 3 + CN_COURSE_SCAN_BYTES;
-        while (q < str && q < limit) {
-            CnToken tok = cn_read_token(q, 0, true);
-            if (tok.kind == CN_TOKEN_END || tok.length <= 0) { break; }
-            q += tok.length;
-        }
-        if (q == str) { return true; }
-    }
-    #undef CN_COURSE_SCAN_BYTES
+    // Act (star) and course names. Both are the loader's fixed-size buffers, so
+    // the test is containment, not pointer identity: callers routinely walk the
+    // name forward -- `+ 3` to skip the vanilla prefix, or past the " 1 "
+    // decoration with cn_strip_course_name_decoration() -- and an equality test
+    // stopped recognising the very same text a few bytes in, which made the
+    // renderer walk UTF-8 as vanilla bytes.
+    if (cn_rom_name_contains(str)) { return true; }
 #else
     (void)str;
 #endif
@@ -634,11 +645,45 @@ bool cn_is_cn_string(const u8 *str) {
 const u8 *cn_label_get(CNLabelId id) {
 #if defined(SM64COOPDX_CN_TEXT)
     extern const u8 *const cn_label_table[];
+    // Labels are compiled in iQue encoding (text/cn_labels.inc.c); convert each
+    // one to UTF-8 the first time it is asked for. 22 short strings, converted
+    // once per process -- not worth doing at startup, when most of them are
+    // never drawn.
+    static u8 sLabelUtf8[CN_LABEL_COUNT][96];
+    static bool sLabelDone[CN_LABEL_COUNT];
+    static bool sConverting;
 
     if (!gCnTextPackActive) { return NULL; }
     if ((u32)id >= CN_LABEL_COUNT) { return NULL; }
 
-    return cn_label_table[id];
+    // A NULL entry is an ICON, not an empty translation: TEXT_COIN_X,
+    // TEXT_STAR, TEXT_STAR_X and TEXT_UNFILLED_STAR are glyphs from the vanilla
+    // font that no Chinese word can replace (see text/cn_labels.inc.c).
+    //
+    // Returning the conversion buffer anyway is what made them disappear: it
+    // holds just the terminator, which is a perfectly valid "empty string", so
+    // INGAME_TEXT_COPY's `cn_label_get(id) ? ... : vanilla` took the empty
+    // branch and drew nothing. That is why the pause screen's coin row showed
+    // a bare "4" with no "×" in front of it, and the star rows lost their
+    // icons. NULL sends the caller back to the ROM string.
+    if (cn_label_table[id] == NULL) { return NULL; }
+
+    // Belt and braces. cn_ique_to_utf8() is a leaf now -- it converts bytes with
+    // sm64_char_to_ascii() and never asks "is this a CN string?" -- but while it
+    // did, this function was the middle of a cycle that overflowed the stack on
+    // the first label drawn. A re-entrant call must not start converting again.
+    if (sConverting) { return NULL; }
+
+    if (!sLabelDone[id]) {
+        s32 size = cn_ique_to_utf8_size(cn_label_table[id]);
+        if (size > (s32) sizeof(sLabelUtf8[id])) { size = (s32) sizeof(sLabelUtf8[id]); }
+        sConverting = true;
+        cn_ique_to_utf8(cn_label_table[id], sLabelUtf8[id], size);
+        sConverting = false;
+        sLabelDone[id] = true;
+    }
+
+    return sLabelUtf8[id];
 #else
     (void)id;
     return NULL;

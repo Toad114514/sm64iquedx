@@ -8,6 +8,7 @@
 #include "game/save_file.h"
 #include "game/segment2.h"
 #include "game/level_info.h"
+#include "game/cn_unicode.h"
 #include "pc/pc_main.h"
 #include "../smlua.h"
 #include "smlua_level_utils.h"
@@ -107,8 +108,13 @@ void smlua_text_utils_shutdown(void) {
     }
 }
 
+// Mod text is UTF-8. Pure ASCII keeps the engine's own conversion (identical
+// behaviour to before); anything with Chinese in it is stored as UTF-8, which
+// the in-game renderer now understands -- that is what makes
+// smlua_replace_dialog("你好, Mario!") work, and what lets a dialog mix the two
+// languages without either one being mangled.
 static u8* smlua_text_utils_convert(const char* str) {
-    return convert_string_ascii_to_sm64(NULL, str, false);
+    return cn_text_from_utf8(str);
 }
 
 // Checks the first 3 characters

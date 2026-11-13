@@ -295,7 +295,11 @@ void print_act_selector_strings(void) {
     // apply_cn_text_pack() has run, so this also follows the runtime toggle.
     {
         const u8 *cnName = ingame_menu_get_course_name(gCurrCourseNum);
-        if (cnName != NULL) { currLevelName = cnName; }
+        // Strip the " 1 " decoration: print_course_number() below prints the
+        // course number of its own, and the CN name carries a copy of it (the
+        // vanilla prefix plus the iQue "　１　" both collapse to ASCII once the
+        // name is UTF-8). Leaving it in drew the number twice.
+        if (cnName != NULL) { currLevelName = cn_strip_course_name_decoration(cnName); }
     }
 
     const u8 *selectedActName = get_star_name_sm64(gCurrCourseNum, sSelectedActIndex + 1, 1);
@@ -342,12 +346,18 @@ void print_act_selector_strings(void) {
         // vanilla name is 8px tall, so lift the line by half the extra height to
         // keep it centred on the same spot. The official iQue build makes the
         // same correction (it moves this line from y = 33 to y = 30).
-        s16 lvlNameY = cn_is_cn_string(currLevelName) ? 30 : 33;
+        bool const cnName = cn_is_cn_string(currLevelName);
+        // The CN name was stripped above, so it has no prefix left to skip;
+        // the vanilla one still has its 3 bytes. Chopping three bytes off a
+        // UTF-8 name would eat one whole character.
+        const u8 *levelNameText = cnName ? currLevelName : currLevelName + 3;
+
+        s16 lvlNameY = cnName ? 30 : 33;
 #ifdef VERSION_EU
-        print_generic_string(get_str_x_pos_from_center(160, (u8*) currLevelName + 3, 10.0f), lvlNameY, currLevelName + 3);
+        print_generic_string(get_str_x_pos_from_center(160, (u8*) levelNameText, 10.0f), lvlNameY, levelNameText);
 #else
-        lvlNameX = get_str_x_pos_from_center(160, (u8*) currLevelName + 3, 10.0f);
-        print_generic_string(lvlNameX, lvlNameY, currLevelName + 3);
+        lvlNameX = get_str_x_pos_from_center(160, (u8*) levelNameText, 10.0f);
+        print_generic_string(lvlNameX, lvlNameY, levelNameText);
 #endif
     }
 

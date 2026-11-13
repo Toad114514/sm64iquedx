@@ -4,6 +4,8 @@
 #include "PR/ultratypes.h"
 #include "game/segment2.h"
 #include "game/cn_rom_assets.h"
+#include "game/cn_font.h"
+#include "game/cn_unicode.h"
 #include "pc/lua/utils/smlua_text_utils.h"
 #include "game/memory.h"
 #include "game/level_info.h"
@@ -11,42 +13,32 @@
 #include <stdlib.h>
 #include <string.h>
 
-// Two dialog tables, on purpose.
+// One dialog table.
 //
-// `gDialogTable` is the game's own table: the US text, copied out of
-// seg2_dialog_original[] (which holds the vanilla ROM data in every build). The
-// Lua text layer reads and writes *this* one -- smlua_text_utils_dialog_get(),
-// smlua_replace_dialog(), dialog_get()/dialog_set() in Lua, Character Select's
-// HOOK_ON_DIALOG round trip. A mod's replacement lives here and nowhere else.
+// The table holds the game's dialog entries: text, page height, box geometry,
+// and a `text` field that is the human-readable copy Lua sees. A mod's
+// replacement lives here (smlua_replace_dialog / dialog_set), and the renderer
+// draws from here -- there is no second table for the Chinese pack any more.
 //
-// `sDialogTableCn` is the iQue pack's table: strings, page heights and box
-// geometry straight out of the 神游 rom. Nothing writes to it except
-// dialog_table_refresh_cn(), and no mod can reach it, because every entry point
-// the Lua API uses goes through dialog_table_get().
+// Switching the pack on does not copy anything: it just repoints `str` at the
+// UTF-8 strings converted out of the 神游 cartridge (cn_rom_dialog_str), and
+// switching it off repoints them back at the ROM. That is the whole mechanism,
+// which is why a mod's English replacement and the pack's Chinese strings can
+// coexist in one table without either one inheriting the other's geometry.
 //
-// Why the split (upstream request): arbitrary mod text cannot be translated, so
-// while the pack shared the single table both sources had to share one entry per
-// dialog. That coupling is what produced "replaced text stays English but is
-// drawn with Chinese line spacing" -- the text came from the mod, the geometry
-// from the pack. Two tables make the bad state unrepresentable: the renderer
-// draws exactly one of them, so the string, the line pitch, the page length and
-// the box height always come from the same source. The runtime switch now means
-// "which table is on screen" and nothing else.
-//
-// Fallback rules, both deliberate:
-//   * no rom (or a rom that does not cover this entry) -> the CN entry has
-//     str == NULL and the renderer uses the US entry: no cartridge, no Chinese.
-//   * custom dialogs (id >= DIALOG_COUNT) exist only in the US table; they are
-//     mod content and the pack has nothing to say about them.
+// Two rules keep the state honest:
+//   * an entry with `replaced` set is never touched by dialog_table_apply_cn(),
+//     so whatever a mod wrote stays exactly as written (including mixed
+//     Chinese/English, which the UTF-8 renderer handles natively);
+//   * `linesPerBox` comes from the cartridge while the Chinese string is
+//     installed, because the line breaks in that string were authored for it.
+//     Every other geometry field stays vanilla: one box, one layout, no
+//     "English text with Chinese spacing".
 
 DialogTable *gDialogTable = NULL;
 
-#if defined(SM64COOPDX_CN_TEXT)
-static DialogTable *sDialogTableCn = NULL;
-#endif
-
-// Allocate one entry from `table`. Shared by both tables; only the US table ever
-// grows at runtime (Lua custom dialogs), so `dialogId` is the US id space.
+// Allocate one entry from `table`. Only the single table ever grows at runtime
+// (Lua custom dialogs), so `dialogId` is the game's id space.
 static struct DialogEntry *dialog_table_alloc_from(DialogTable *table, s32 *dialogId) {
     if (table == NULL) { return NULL; }
 
@@ -69,6 +61,25 @@ static struct DialogEntry *dialog_table_alloc_from(DialogTable *table, s32 *dial
     return dialog;
 }
 
+// The Lua-facing copy of a string.
+//
+// UTF-8 strings (the ones converted from the cartridge, and anything a mod
+// wrote in Chinese) can be handed to Lua verbatim -- that is the point of the
+// encoding change: a mod reading dialog.text now sees 炸弹王国 instead of an
+// empty string. Vanilla strings still go through the ASCII conversion.
+static char *dialog_text_from_str(const u8 *str) {
+    if (str == NULL) { return NULL; }
+
+    if (cn_is_cn_string(str)) {
+        size_t len = strlen((const char *) str);
+        char *copy = (char *) malloc(len + 1);
+        if (copy != NULL) { memcpy(copy, str, len + 1); }
+        return copy;
+    }
+
+    return convert_string_sm64_to_ascii(NULL, str);
+}
+
 void dialog_table_init(void) {
     gDialogTable = growing_array_init(gDialogTable, 256, malloc, free);
 
@@ -81,22 +92,8 @@ void dialog_table_init(void) {
         }
 
         memcpy(dialog, dialogOrig, sizeof(struct DialogEntry));
-        // The US strings are ASCII in every build (the pack has its own table),
-        // so this is a real conversion and `text` is never NULL.
-        dialog->text = convert_string_sm64_to_ascii(NULL, dialog->str);
+        dialog->text = dialog_text_from_str(dialog->str);
     }
-
-#if defined(SM64COOPDX_CN_TEXT)
-    sDialogTableCn = growing_array_init(sDialogTableCn, DIALOG_COUNT + 1, malloc, free);
-    for (u32 i = 0; i < DIALOG_COUNT; i++) {
-        struct DialogEntry *cn = dialog_table_alloc_from(sDialogTableCn, NULL);
-        if (!cn) {
-            sys_fatal("Failed to allocate Chinese DialogEntry for dialog ID %d", i);
-        }
-        memset(cn, 0, sizeof(struct DialogEntry));
-    }
-    dialog_table_refresh_cn();
-#endif
 }
 
 struct DialogEntry* dialog_table_alloc(s32 *dialogId) {
@@ -111,72 +108,43 @@ struct DialogEntry* dialog_table_get(s32 dialogId) {
     return gDialogTable->buffer[dialogId];
 }
 
+void dialog_table_apply_cn(bool on) {
 #if defined(SM64COOPDX_CN_TEXT)
-// Pull the pack's dialog entries out of the rom.
-//
-// Called from apply_cn_text_pack() (startup, the settings toggle, and every Lua
-// reset) rather than once from dialog_table_init(), because the rom can finish
-// loading after this table exists.
-void dialog_table_refresh_cn(void) {
     u32 i;
 
-    if (sDialogTableCn == NULL || gDialogTable == NULL) { return; }
+    if (gDialogTable == NULL) { return; }
 
-    for (i = 0; i < DIALOG_COUNT && i < sDialogTableCn->count; i++) {
-        struct DialogEntry *cn = sDialogTableCn->buffer[i];
+    for (i = 0; i < DIALOG_COUNT && i < gDialogTable->count; i++) {
+        struct DialogEntry *dialog = gDialogTable->buffer[i];
         const struct DialogEntry *orig = smlua_text_utils_dialog_get_unmodified(i);
-        const u8 *str = cn_rom_dialog_str(i);
+        const u8 *cnStr;
+        const u8 *want;
 
-        if (cn == NULL || orig == NULL) { continue; }
+        if (dialog == NULL || orig == NULL) { continue; }
 
-        cn->unused = orig->unused;
-        // .text stays NULL: it is the Lua-facing ASCII view of a string, and Lua
-        // only ever sees gDialogTable (see the note at the top of the file).
-        cn->text = NULL;
-        cn->replaced = false;
-        cn->str = str;
+        // A mod's text is not ours to overwrite. This is what keeps a Lua
+        // replacement alive across a level change with the pack on.
+        if (dialog->replaced) { continue; }
 
-        if (str != NULL) {
-            // The iQue table carries its own geometry per entry (DIALOG_005 is
-            // 4 lines, DIALOG_117 is 2). The box height, the page break and the
-            // scissor window are all derived from linesPerBox.
-            cn->linesPerBox = (s8) cn_rom_dialog_lines(i);
-            cn->leftOffset = (s16) cn_rom_dialog_left(i);
-            cn->width = (s16) cn_rom_dialog_width(i);
-        } else {
-            // No rom: keep the vanilla metrics so nothing reads garbage. This
-            // entry is not drawn anyway -- str == NULL makes it fall back.
-            cn->linesPerBox = orig->linesPerBox;
-            cn->leftOffset = orig->leftOffset;
-            cn->width = orig->width;
-        }
+        cnStr = on ? cn_rom_dialog_str(i) : NULL;
+        want = (cnStr != NULL) ? cnStr : orig->str;
+
+        dialog->unused = orig->unused;
+        dialog->leftOffset = orig->leftOffset;
+        dialog->width = orig->width;
+        // The cartridge's line breaks were authored for its own page height;
+        // take the count with the string. Everything else stays vanilla.
+        dialog->linesPerBox = (cnStr != NULL) ? (s8) cn_rom_dialog_lines(i) : orig->linesPerBox;
+
+        if (dialog->str == want) { continue; }
+
+        dialog->str = (u8 *) want;
+        free(dialog->text);
+        dialog->text = dialog_text_from_str(want);
     }
-}
 #else
-void dialog_table_refresh_cn(void) {
-}
+    (void) on;
 #endif
-
-struct DialogEntry* dialog_table_get_render(s32 dialogId) {
-    if (!IS_VALID_DIALOG(dialogId)) {
-        return NULL;
-    }
-
-#if defined(SM64COOPDX_CN_TEXT)
-    if (gCnTextPackActive && IS_VALID_VANILLA_DIALOG(dialogId) && sDialogTableCn != NULL) {
-        struct DialogEntry *cn = sDialogTableCn->buffer[dialogId];
-        if (cn != NULL && cn->str != NULL) {
-            return cn;
-        }
-    }
-#endif
-
-    return dialog_table_get(dialogId);
-}
-
-bool dialog_table_render_is_cn(s32 dialogId) {
-    if (!IS_VALID_DIALOG(dialogId)) { return false; }
-    return dialog_table_get_render(dialogId) != dialog_table_get(dialogId);
 }
 
 void dialog_table_reset(void) {
@@ -184,8 +152,6 @@ void dialog_table_reset(void) {
 
     if (!table) return;
 
-    // Only the US table carries `replaced` entries; the CN table is rebuilt from
-    // the rom by dialog_table_refresh_cn() and has nothing to undo.
     for (u32 i = 0; i < table->count; i++) {
         struct DialogEntry *dialog = table->buffer[i];
 
@@ -221,18 +187,4 @@ void dialog_table_shutdown(void) {
         free(table);
         gDialogTable = NULL;
     }
-
-#if defined(SM64COOPDX_CN_TEXT)
-    // The CN entries own nothing but pointers into the rom's segment, so the
-    // entries and the array are all there is to release.
-    if (sDialogTableCn != NULL) {
-        for (u32 i = 0; i < sDialogTableCn->count; i++) {
-            free(sDialogTableCn->buffer[i]);
-        }
-
-        free(sDialogTableCn->buffer);
-        free(sDialogTableCn);
-        sDialogTableCn = NULL;
-    }
-#endif
 }

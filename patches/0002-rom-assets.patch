@@ -28,16 +28,17 @@
  static void mods_sort(struct Mods* mods) {
 --- a/src/pc/pc_main.c
 +++ b/src/pc/pc_main.c
-@@ -18,6 +18,8 @@
+@@ -18,6 +18,9 @@
  
  #include "rom_assets.h"
  #include "rom_checker.h"
 +#include "cn_text_gate.h"
++#include "cn_romhack.h"
 +#include "game/cn_rom_assets.h"
  #include "pc_main.h"
  #include "loading.h"
  #include "cliopts.h"
-@@ -42,6 +44,7 @@
+@@ -42,6 +45,7 @@
  #include "pc/djui/djui.h"
  #include "pc/djui/djui_unicode.h"
  #include "pc/djui/djui_panel.h"
@@ -45,7 +46,7 @@
  #include "pc/djui/djui_panel_modlist.h"
  #include "pc/djui/djui_ctx_display.h"
  #include "pc/djui/djui_fps_display.h"
-@@ -55,6 +58,7 @@
+@@ -55,6 +59,7 @@
  
  #include "gfx_dimensions.h"
  #include "game/segment2.h"
@@ -53,7 +54,7 @@
  
  #include "engine/math_util.h"
  
-@@ -500,6 +504,177 @@
+@@ -500,6 +505,199 @@
      return NULL;
  }
  
@@ -86,19 +87,30 @@
 +
 +// Is one of the enabled mods a romhack?
 +//
-+// "Romhack" here means "ships data that replaces the game's own": a level
-+// (levels/*.lvl), an actor model / collision (actors/*.bin, actors/*.col) or a
-+// behavior (data/*.bhv). Those are exactly the mod directories mod_load_files()
-+// scans, so the test is on the directory prefix rather than on a hand-written
-+// list of extensions -- a new file type in one of those directories is romhack
-+// data by construction.
++// The two questions that can be asked about one mod live in cn_romhack.h (a
++// header, so .workbuddy/test_cn_romhack.sh can compile the real rule against a
++// table instead of trusting a regex on this file):
 +//
-+// What this deliberately does NOT count: textures/ (a skin, e.g. Character
-+// Select's 50 .tex) and scripts (any .lua). Those leave the level geometry, the
-+// behavior table and -- the part that matters here -- the text id space alone,
-+// so the iQue tables still line up and the pack keeps working. Only data that
-+// re-authors the game itself makes the pack meaningless.
++//   * does its metadata say `-- incompatible: romhack`?
++//   * does it ship a levels/ directory?
 +//
++// Either one makes the iQue data meaningless. An actor model (Character
++// Select's skins, usm's three decorative actors) or a behavior script does not:
++// neither touches the level list, the course/act tables or the text id space.
++// Counting actors/ used to grey the pack out for a player whose only "romhack"
++// was a skin -- the comment in cn_romhack.h spells out the rule.
++static bool mod_is_romhack(const struct Mod *mod) {
++    u16 f;
++
++    if (cn_incompatible_is_romhack(mod->incompatible)) { return true; }
++
++    for (f = 0; f < mod->fileCount; f++) {
++        if (cn_path_ships_levels(mod->files[f].relativePath)) { return true; }
++    }
++
++    return false;
++}
++
 +// gLocalMods (not gActiveMods) is the right list to read at startup: mods_activate()
 +// runs late (it is called from network_init(), i.e. *after* chinese_text_pack_init()),
 +// while gLocalMods is already populated and carries the enabled flags by the time
@@ -106,25 +118,14 @@
 +// active set is authoritative instead -- it also covers mods streamed in from a
 +// server, which never appear in gLocalMods.
 +static bool cn_romhack_mods_present(void) {
-+    static const char *const sRomhackDirs[] = { "levels/", "actors/", "data/" };
 +    struct Mods *list = (gActiveMods.entryCount > 0) ? &gActiveMods : &gLocalMods;
-+    u16 i, f;
-+    u32 d;
++    u16 i;
 +
 +    for (i = 0; i < list->entryCount; i++) {
 +        struct Mod *mod = list->entries[i];
 +
 +        if (mod == NULL || !mod->enabled) { continue; }
-+
-+        for (f = 0; f < mod->fileCount; f++) {
-+            const char *rel = mod->files[f].relativePath;
-+
-+            for (d = 0; d < sizeof(sRomhackDirs) / sizeof(sRomhackDirs[0]); d++) {
-+                size_t len = strlen(sRomhackDirs[d]);
-+
-+                if (strncmp(rel, sRomhackDirs[d], len) == 0) { return true; }
-+            }
-+        }
++        if (mod_is_romhack(mod)) { return true; }
 +    }
 +
 +    return false;
@@ -184,7 +185,12 @@
 +    // through cn_text_pack_target() again (rom_assets.c does the latter), so the
 +    // config value is never mistaken for the live one.
 +    gCnTextPackActive = target ? 1 : 0;
-+    apply_cn_text_pack();
++
++    // The tables are NOT swapped here on purpose. The pack overwrites the
++    // vanilla dialog / course / act tables when a level is loaded
++    // (chinese_text_pack_on_level_load), so the title screen and the file
++    // select keep the game's own text and the swap happens where the player
++    // can see it take effect. See that function for the full rationale.
 +
 +    // rom_assets.c already made the same decision for the textures, but it runs
 +    // on the loading thread *before* the mods are known, so with the rom present
@@ -202,8 +208,13 @@
 +             romhack ? " (romhack mod loaded: US data, no translation)" : "");
 +}
 +
-+// Runtime toggle used by the MISC settings checkbox. Swaps the live dialog /
-+// course / act tables and makes the choice persistent.
++// Runtime toggle used by the MISC settings checkbox.
++//
++// It stores the choice and swaps the textures, but deliberately does NOT touch
++// the text tables: the dialog / course / act tables are swapped when a level is
++// loaded (chinese_text_pack_on_level_load below). That is what keeps a dialog
++// that is already on screen from changing language mid-sentence, and it makes
++// "flip the switch, then enter the level you want to read" the mental model.
 +void chinese_text_pack_set_active(bool active) {
 +    // The checkbox is greyed out in both cases, so this is defence in depth for
 +    // the paths that do not go through the UI (a config reload, a future
@@ -215,14 +226,26 @@
 +    if (active && (!cn_rom_assets_ready() || gCnTextPackRomhack)) {
 +        return;
 +    }
++
 +    configChineseText = active;
-+    gCnTextPackActive = active ? 1 : 0;
-+    apply_cn_text_pack();
 +    // The pack also swaps a handful of textures (the power meter's 「力量」 and
-+    // the title wordmark). Re-apply them so the change is visible without a
-+    // restart -- cn_tex restores the saved US pixels when `active` is false.
++    // the title wordmark). Those are art, not text, so they follow the switch
++    // immediately -- there is no dialog to cut in half.
 +    cn_tex_apply(active);
 +    configfile_save(configfile_name());
++}
++
++// Called from level_init(): this is the only place the text tables change.
++//
++// The gate is re-evaluated here rather than at the moment the checkbox flips,
++// so the state a player sees is always "the choice as of the last level load".
++// A romhack can also appear between two levels (a mod got enabled), which is
++// the other reason to re-derive instead of remembering a boolean.
++void chinese_text_pack_on_level_load(void) {
++    bool const target = cn_text_pack_target(cn_rom_assets_ready(), configChineseText, gCnTextPackRomhack);
++
++    gCnTextPackActive = target ? 1 : 0;
++    apply_cn_text_pack();
 +}
 +
 +#endif
@@ -231,7 +254,7 @@
  int main(int argc, char *argv[]) {
      // handle terminal arguments
      if (!parse_cli_opts(argc, argv)) { return 0; }
-@@ -577,6 +752,13 @@
+@@ -577,6 +775,13 @@
      djui_init_late();
      djui_console_message_dequeue();
  

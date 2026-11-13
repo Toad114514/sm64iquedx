@@ -20,6 +20,10 @@
 u8 *cn_font_get_glyph(u16 code);
 void render_cn_char(u16 code);
 void cn_draw_glyph_rect(s32 x, s32 y, u16 code);
+
+// Same, scaled into a `cell`-pixel square. For the fixed-pitch lists (the
+// file-select score table is 12px per row) that cannot fit a 16px cell.
+void cn_draw_glyph_rect_scaled(s32 x, s32 y, u16 code, s32 cell);
 f32 cn_char_width(u16 code);
 
 // ---------------------------------------------------------------------------
@@ -144,6 +148,16 @@ CnToken cn_read_token(const u8 *str, s32 index, bool cn);
 // apply_cn_text_pack(). Walkers use this to decide the `cn` argument above,
 // because the two encodings cannot be told apart from the bytes.
 bool cn_is_cn_string(const u8 *str);
+
+// Register a UTF-8 buffer that came from a mod (cn_text_from_utf8) so
+// cn_is_cn_string() can recognise it later. The renderer needs this because it
+// only has the pointer: a mod's Chinese string is not in any table the engine
+// knows about.
+//
+// Bounded and replace-oldest: a long-running session that replaces thousands of
+// dialogs must not grow without limit. Losing an entry only costs that string
+// its UTF-8 fast path (it would be walked as vanilla bytes), never a crash.
+void cn_register_utf8_string(const u8 *str);
 
 // ---------------------------------------------------------------------------
 // Fixed UI labels (pause menu, Lakitu hint box, HUD).

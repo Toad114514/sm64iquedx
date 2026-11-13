@@ -163,6 +163,20 @@ static const char *ascii_to_sm64_char(u8 *str64, const char *strAscii, bool menu
     return strAscii + 1;
 }
 
+// One character at a time, for the UTF-8 text walker (cn_unicode.c). The
+// multi-character entries in sSm64CharMap ("the", "you", ")(", ...) cannot
+// match a one-character buffer, which is exactly right: the walker draws
+// character by character, so those combinations are not available.
+u8 ascii_char_to_sm64(char c, bool menu) {
+    char buf[2];
+    u8 out;
+
+    buf[0] = c;
+    buf[1] = '\0';
+    ascii_to_sm64_char(&out, buf, menu);
+    return out;
+}
+
 static char *sm64_to_ascii_char(char *strAscii, u8 c) {
     for (u32 i = 0; i < ARRAY_COUNT(sSm64CharMap); ++i) {
         const struct Sm64Char *ch = &sSm64CharMap[i];
@@ -173,6 +187,22 @@ static char *sm64_to_ascii_char(char *strAscii, u8 c) {
     }
     *strAscii = ' ';
     return strAscii + 1;
+}
+
+// One font byte -> its text, terminated. The mapping without the policy.
+//
+// cn_unicode.c decodes the *bytes of a cartridge string*, not an engine string,
+// so it must not go through convert_string_sm64_to_ascii(): that one now asks
+// cn_is_cn_string() whether the buffer is Chinese, and the answer is computed
+// by walking back through cn_label_get() -> cn_ique_to_utf8() -> here. The
+// first UI label that got drawn blew the stack (SI_KERNEL SEGV, 2026-11-14).
+// It is also simply cheaper: one table scan per byte instead of the four
+// pointer-range scans the "is it CN?" test does.
+//
+// `out` must hold at least SM64_TO_ASCII_MAX_CHAR_SIZE + 1 bytes.
+char *sm64_char_to_ascii(char *out, u8 c) {
+    *sm64_to_ascii_char(out, c) = '\0';
+    return out;
 }
 
 u8 *convert_string_ascii_to_sm64(u8 *str64, const char *strAscii, bool menu) {

@@ -167,11 +167,16 @@ void print_menu_generic_string(s16 x, s16 y, const u8 *str);
 const u8 *ingame_menu_get_course_name(s32 courseNum);
 const u8 *ingame_menu_get_act_name(s32 courseNum, s32 starNum);
 
-// Strips the leading U+3000 + course number + U+3000 from an iQue course
-// name. Returns a pointer inside the same buffer (never a copy), or `name + 3`
-// when the CN decoration is absent. Defined in ingame_menu.c, used by the
-// pause menu header where the number is already drawn separately.
+// Strips the vanilla prefix and the iQue "　１　" decoration from a course name.
+// Returns a pointer inside the same buffer (never a copy), or `name + 3` when
+// no number is present. Defined in ingame_menu.c.
 const u8 *cn_strip_course_name_decoration(const u8 *name);
+
+// print_menu_generic_string() for a fixed-pitch list that cannot fit a 16px CN
+// cell (the file-select score table is 12px per row): CJK glyphs are drawn into
+// a `cell`-pixel square. Falls back to the normal path when the string has no
+// CJK in it at all, so vanilla and English text are unaffected.
+void print_menu_generic_string_compact(s16 x, s16 y, const u8 *str, s16 cell);
 void handle_menu_scrolling(s8 scrollDirection, s8 *currentIndex, s8 minIndex, s8 maxIndex);
 #if defined(VERSION_US) || defined(VERSION_EU)
 s16 get_str_x_pos_from_center(s16 centerPos, u8 *str, f32 scale);

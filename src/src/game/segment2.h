@@ -16,9 +16,12 @@ extern u8* seg2_act_name_table_original[];
 extern u8 gCnTextPackActive;
 // Repoint every dialog entry and course/act name slot at the active pack.
 void apply_cn_text_pack(void);
-// Runtime switch used by the MISC settings checkbox: flips the pack, re-applies
-// the tables and persists configChineseText.
+// Runtime switch used by the MISC settings checkbox. Records the choice and
+// swaps the localised textures; the text tables are swapped at level load.
 void chinese_text_pack_set_active(bool active);
+// Swap the dialog / course / act tables according to the current choice.
+// Called from level_init() -- the only place the tables change.
+void chinese_text_pack_on_level_load(void);
 #endif
 extern const Gfx dl_rgba16_text_begin[];
 extern const Gfx dl_rgba16_text_end[];

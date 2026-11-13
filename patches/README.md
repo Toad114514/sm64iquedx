@@ -6,17 +6,17 @@
 | --- | --- | --- | --- |
 | `0001-build-and-config.patch` | 3 | 四套上游共用 | `Makefile` 的 `CN_TEXT_PACK` 开关 + `configChineseText*` 三个配置项 |
 | `0002-rom-assets.patch` | 4 | 共用 | 神游 ROM 探测（`rom_checker.h`）、启动装配与改版门控（`pc_main.c`）、分段资源读取（`rom_assets.c`）、启用模组时重新判定（`mods/mods.c`） |
-| `0003-text-core.patch` | 6 | 共用 | 两字节编码/字形核心、HUD 与标题文本（`print.c` / `area.c`）、课程与动作名查表、`text/define_*.inc.c` |
+| `0003-text-core.patch` | 8 | 共用 | 两字节编码/字形核心、HUD 与标题文本（`print.c` / `area.c`）、课程与动作名查表（`level_info.[ch]`）、进关时切换文本表（`level_update.c`）、`text/define_*.inc.c` |
 | `0004-dialog.patch` | 5 | 共用 | 双表架构（`dialog_table.[ch]`）、对话框渲染与分页/盒高（`ingame_menu.[ch]`）、Lua 侧替换 |
 | `0005-menus.patch` | 5 | 共用 | 文件选择、选星盘、标题过场（含 iQue 标题网格） |
 | `0006-asset-overlay.patch` | 2 | 共用 | iQue 贴图/几何覆盖的消费侧：能量表轮盘偏移（HUD 底层 + Lua 绑定） |
 | `0007-djui-frontend.patch` | 3 | 三目标共用，**可选** | 设置 → 其他 的「中文字库」开关；`djui_panel_confirm.[ch]` 的 `create_ex()`（目前无调用点） |
 | `0008-android.patch` | 3 | `android` / `android-cn` **共用** | Android 平台增量（`Android.mk` / `Makefile` / `pc_main.c`） |
-| `cn_extra/` | 15 | 三目标共用 | 上游不存在的新增文件，仅补缺、不覆盖 |
+| `cn_extra/` | 19 | 三目标共用 | 上游不存在的新增文件，仅补缺、不覆盖 |
 
 `0001`~`0006` 必选、四套上游共用；`0007` 只在 `--frontend` 时应用；`0008` 由两个 Android 目标共用**同一份**。新增一个分组 = 加一个编号更大的文件，不需要改应用器的分组表。语言字符串与中文配置项**不是补丁**，由 `scripts/add_lang_strings.sh` / `scripts/add_cn_config.sh` 在应用阶段插入。
 
-拆分后总数 28 个文件（`0001`~`0007` 合计），`scripts/gen_all_patches.sh` 每次生成都会拿「不加分组过滤的全量差异」当参照，断言分组**无遗漏、无重复**；同时拦住两种会「同一处改动被打两遍」的残留：拆分前的单文件补丁（`0001-src-overlay.patch` 等），以及按目录分组的旧目录（`01-build/` … `08-platform/`）。
+拆分后总数 30 个文件（`0001`~`0007` 合计），`scripts/gen_all_patches.sh` 每次生成都会拿「不加分组过滤的全量差异」当参照，断言分组**无遗漏、无重复**；同时拦住两种会「同一处改动被打两遍」的残留：拆分前的单文件补丁（`0001-src-overlay.patch` 等），以及按目录分组的旧目录（`01-build/` … `08-platform/`）。
 
 四套上游与目标名的对应见仓库根 `upstream.txt`；`pc` 同时覆盖原版 CoopDX 与上善若的 PC 汉化版。
 
@@ -110,7 +110,7 @@ theirs = 本仓库 src/（PC 终态）
 
 ## cn_extra/ 是「新增文件」，只补缺不覆盖
 
-`cn_extra/` 收录 15 个上游不存在的文件，其中 **`lang/Chinese.ini`** 在 PC 上游 `lang/` 里没有（只有 11 种语言；汉化版 Android 则有自己的一份）。因此应用时逐个文件判断：目标已存在就跳过，只补缺。
+`cn_extra/` 收录 19 个上游不存在的文件，其中 **`lang/Chinese.ini`** 在 PC 上游 `lang/` 里没有（只有 11 种语言；汉化版 Android 则有自己的一份）。因此应用时逐个文件判断：目标已存在就跳过，只补缺。
 
 ```bash
 # scripts/apply_patches.sh 内部语义
@@ -194,6 +194,6 @@ python3 scripts/gen_platform_patches.py \
     --android-cn <汉化版 Android 上游目录>
 ```
 
-第 1 步会断言 `0001`~`0007` 恰好覆盖 `src/` 的全部差异（无遗漏、无重复）、都不含 `lang/`、且 `patches/` 下没有旧的分组目录与旧单文件补丁残留。第 2 步自检：`0001`~`0006`（跳过 3 个漂移文件）+ 平台补丁 + `0007` + 两个插入脚本叠加后与三方合并终态逐字节一致（`android` / `android-cn` 各 29 文件），语言字符串齐全，两个脚本复跑无改动（幂等），不应用 `0007` 时 3 个前端文件保持上游原版，平台补丁与 `0001`~`0006` 不重叠。**生成器会逐文件比对两个上游算出来的平台增量，一旦不同就直接报错**——那说明两个上游真的分道扬镳，得退回「每目标一份补丁」，而不是让共享补丁静默只对其中一个有效。
+第 1 步会断言 `0001`~`0007` 恰好覆盖 `src/` 的全部差异（无遗漏、无重复）、都不含 `lang/`、且 `patches/` 下没有旧的分组目录与旧单文件补丁残留。第 2 步自检：`0001`~`0006`（跳过 3 个漂移文件）+ 平台补丁 + `0007` + 两个插入脚本叠加后与三方合并终态逐字节一致（`android` / `android-cn` 各 31 文件），语言字符串齐全，两个脚本复跑无改动（幂等），不应用 `0007` 时 3 个前端文件保持上游原版，平台补丁与 `0001`~`0006` 不重叠。**生成器会逐文件比对两个上游算出来的平台增量，一旦不同就直接报错**——那说明两个上游真的分道扬镳，得退回「每目标一份补丁」，而不是让共享补丁静默只对其中一个有效。
 
 语言字符串改了文案、或中文配置项改了名字时不用重生成任何补丁，只改 `scripts/add_lang_strings.sh` / `scripts/add_cn_config.sh` 里对应的常量。

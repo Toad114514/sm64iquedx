@@ -80,6 +80,8 @@ gen_group 0003-text-core.patch \
     src/game/print.c \
     src/game/segment2.h \
     src/game/level_info.c \
+    src/game/level_info.h \
+    src/game/level_update.c \
     src/game/area.c \
     text/define_text.inc.c \
     text/define_courses.inc.c

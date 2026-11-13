@@ -1,0 +1,121 @@
+#ifndef CN_UNICODE_H
+#define CN_UNICODE_H
+
+#include "types.h"
+
+// The three control bytes, repeated here so this header stays dependency-free
+// (it is also compiled by the host-side test, which has no engine headers).
+// They must match DIALOG_CHAR_* in ingame_menu.h.
+#define CN_CHAR_BYTE_NEWLINE   0xFE
+#define CN_CHAR_BYTE_SPACE     0x9E
+#define CN_CHAR_BYTE_TERMINATOR 0xFF
+
+// ---------------------------------------------------------------------------
+// One text encoding for everything.
+// ---------------------------------------------------------------------------
+//
+// Until now the pack spoke iQue: a dense two-byte stream (0x01-0x05 + low byte)
+// that is byte-for-byte indistinguishable from the vanilla single-byte font
+// (vanilla '1' is 0x01, CN 的 is 0x01 0x01). That ambiguity is why every walker
+// had to be *told* which encoding it was looking at, why the pack needed its own
+// dialog table, and why a Lua replacement could not be Chinese.
+//
+// All text is now UTF-8, terminated by 0xFF, with 0xFE as the line break:
+//
+//   0xFF                 end of string
+//   0xFE                 new line      (== DIALOG_CHAR_NEWLINE)
+//   0x20..0x7E           printable ASCII, drawn with the vanilla font
+//   0xC2..0xF4 + cont.   UTF-8 sequence -> glyph from the iQue atlas
+//   U+E000..U+E0FF       icon escape, see below
+//   0xFA / 0xFC / 0xFD   legacy single-byte LUT glyphs (star icons), passed
+//                        through to the vanilla renderer untouched
+//
+// 0xFF and 0xFE are not legal UTF-8 bytes, so the three spaces cannot collide.
+// A UTF-8 character with no glyph in the atlas is drawn as '?', which is the
+// only failure mode the renderer has: no string is ever silently skipped.
+//
+// Nothing has to ask "is this Chinese?" any more. An English string, a Chinese
+// string and a mod's mixed string all walk the same loop.
+//
+// --- the icon escape -------------------------------------------------------
+//
+// The iQue stream spells *every* vanilla-font character as `0x00 nn`, and that
+// includes the 16px tiles that are not characters at all: 0x50-0x53 are the
+// arrows, 0x54-0x58 the bold A / B / C / Z / R button glyphs, 0xF9 the coin,
+// 0xFA/0xFD the filled and open stars. Those bytes are all >= 0x50, which is
+// exactly where the plain 8px ASCII range of the dialog font ends.
+//
+// Rendering them as ASCII text loses the glyph: the button letters came out as
+// thin 8px "A"/"B" instead of the bold button tiles -- and a mod string holding
+// "T" is indistinguishable from a bold-A tile if the byte is stored bare.
+//
+// So glyphs from 0x50 up travel as U+E000 + the glyph code (Private Use Area:
+// no real character is ever mapped there, and a mod that pastes one in gets the
+// glyph it asks for). The renderer draws them with the same vanilla
+// render_generic_char() call and the same gDialogCharWidths[] entry the original
+// game uses, so a button is exactly as wide and exactly as bold as before.
+#define CN_GLYPH_ESCAPE_BASE  0xE000
+#define CN_GLYPH_ESCAPE_LIMIT 0xE100
+#define CN_GLYPH_ESCAPE_FIRST 0x50  // first vanilla byte stored as an escape
+
+typedef enum {
+    CN_CHAR_END = 0,   // 0xFF: end of string
+    CN_CHAR_NEWLINE,   // 0xFE: line break
+    CN_CHAR_NARROW,    // printable ASCII in `ascii`; 8px wide
+    CN_CHAR_WIDE,      // CJK glyph, iQue code in `code`; 16px wide
+    CN_CHAR_LEGACY,    // vanilla single-byte LUT glyph (star/coin icons)
+    CN_CHAR_MISSING,   // no glyph; draw '?' instead
+} CnCharKind;
+
+typedef struct {
+    CnCharKind kind;
+    u16 code;   // CN_CHAR_WIDE: iQue code. CN_CHAR_LEGACY: vanilla glyph byte.
+    u8 ascii;   // CN_CHAR_NARROW: the character
+    s32 length; // bytes consumed (>= 1, always advances)
+} CnChar;
+
+// Decode one character at str[index]. `length` is never 0, so a walker always
+// makes progress even on a malformed string.
+CnChar cn_read_char(const u8 *str, s32 index);
+
+// iQue code <-> Unicode. Both are pure table lookups.
+u16 cn_unicode_to_code(u32 cp);      // 0 when the atlas has no such character
+u32 cn_code_to_unicode(u16 code);    // 0 when the code is not in the atlas
+
+// Encode one code point as UTF-8 into `out`; returns the byte count (1-4).
+s32 cn_utf8_encode(u32 cp, u8 *out);
+
+// Convert an iQue-encoded string (the format the 神游 cartridge stores and the
+// one text/cn_labels.inc.c is generated in) into the UTF-8 form above.
+//
+// `cap` is the size of `dst`; the result is always terminated. Returns the
+// number of bytes written excluding the terminator, or -1 when it did not fit
+// (in which case the output is still terminated, never truncated mid-character
+// in a way that loses the terminator).
+s32 cn_ique_to_utf8(const u8 *src, u8 *dst, s32 cap);
+
+// Size in bytes of a UTF-8 string with the same content as the iQue one, plus
+// the terminator. Used to size the conversion buffer.
+s32 cn_ique_to_utf8_size(const u8 *src);
+
+// Convert one printable ASCII character to the engine's single-byte dialog
+// font index (what render_generic_char() and gDialogCharWidths[] expect).
+// Unknown characters come back as the space glyph.
+u8 cn_ascii_to_dialog_char(u8 ascii);
+
+// Turn a C string (UTF-8, as every Lua mod writes it) into the storage format
+// the renderers accept: either the engine's single-byte encoding, when the
+// text is pure ASCII, or literal UTF-8 with 0xFE line breaks and a 0xFF
+// terminator when it contains anything else.
+//
+// Returns a malloc'd buffer the caller owns, or NULL on allocation failure.
+// This is what lets smlua_replace_dialog() and HOOK_ON_DIALOG hand over
+// Chinese text without losing it to an ASCII-only conversion.
+u8 *cn_text_from_utf8(const char *src);
+
+// Width in pixels of one decoded character, given the vanilla width table.
+// (Defined here so every caller agrees; the table itself lives in
+// ingame_menu.c.)
+f32 cn_char_width_of(const CnChar *ch, const u8 *vanillaWidths);
+
+#endif // CN_UNICODE_H

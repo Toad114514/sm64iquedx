@@ -7,6 +7,7 @@
 
 #include "types.h"
 #include "cn_rom_assets.h"
+#include "cn_unicode.h"
 
 // The engine's MIO0 decoder. It lives in src/pc/rom_assets.c because that is
 // where the vanilla segments are expanded; there is no game-side copy, and
@@ -35,6 +36,16 @@ static u8   *sTextures = NULL;
 // text/cn_courses_cn.inc.c held -- verified entry by entry when it was removed.
 static u8 sCourseNames[CN_ROM_COURSE_COUNT][CN_ROM_NAME_BYTES];
 static u8 sActNames[CN_ROM_ACT_MAIN_COUNT][CN_ROM_NAME_BYTES];
+
+// Dialog text, converted to UTF-8 once at load time.
+//
+// The cartridge keeps 170 fixed-size 16-byte entries that point into segment 2;
+// the strings there are in the iQue encoding. The renderer only speaks UTF-8
+// (cn_unicode.h), so each entry gets its own heap copy here -- about 12 KB for
+// the whole table. NULL until the string has been converted.
+static u8 *sDialogStrs[CN_ROM_DIALOG_COUNT];
+
+static bool build_dialog_strings(void);
 
 // Owned by this module, declared in cn_data/cn_glyphs_16x16.h, consumed by
 // cn_font.c. NULL until the rom has been read.
@@ -144,36 +155,54 @@ static bool seg_offset(u32 addr, u32 *off) {
     return true;
 }
 
-// Copy the token stream at `off` into `dst`, optionally behind the 3-byte
-// vanilla course prefix, and append the second 0xFF 0xFF the generated arrays
-// carried (the string already ends with one; the old generator emitted another
-// pair and the renderers were tuned against those exact lengths).
+// Copy the token stream at `off` into `dst` as UTF-8, optionally behind the
+// 3-byte vanilla course prefix.
 //
-// Walks two bytes at a time because 0xFF 0xFF -- not any single 0xFF -- is the
-// terminator here: 0xFF is also the lead byte of the space and newline tokens,
-// so a byte-wise search would cut every name at its first space.
+// The cartridge stores names in the iQue encoding; everything the renderer
+// sees is UTF-8 (see cn_unicode.h), so the conversion happens here, once, at
+// load time. The prefix stays exactly three bytes (space, digit, space) because
+// every consumer skips it with `+ 3`; slots above 9 get a space where the digit
+// would be, which is what the old single-byte prefix rendered as anyway.
 static bool copy_name(u8 *dst, u32 off, int prefixByte) {
-    u32 n = 0;
+    s32 n = 0;
+    s32 converted;
+
+    if (off >= CN_ROM_SEG2_SIZE) { return false; }
 
     if (prefixByte >= 0) {
-        dst[n++] = 0x9E;
-        dst[n++] = (u8)prefixByte;
-        dst[n++] = 0x9E;
+        dst[n++] = ' ';
+        dst[n++] = (prefixByte >= 1 && prefixByte <= 9) ? (u8)('0' + prefixByte) : (u8)' ';
+        dst[n++] = ' ';
     }
 
-    for (;;) {
-        // room for this token plus the trailing 0xFF 0xFF
-        if (n + 4 > CN_ROM_NAME_BYTES) { return false; }
-        if (off + 2 > CN_ROM_SEG2_SIZE) { return false; }
-        dst[n++] = sSeg2[off + 0];
-        dst[n++] = sSeg2[off + 1];
-        if (sSeg2[off] == 0xFF && sSeg2[off + 1] == 0xFF) { break; }
-        off += 2;
+    converted = cn_ique_to_utf8(sSeg2 + off, dst + n, (s32) CN_ROM_NAME_BYTES - n);
+    if (converted < 0) { return false; }
+    n += converted;
+
+    // The cartridge indents every act (star) name with a leading iQue space.
+    // It survives the conversion as one ASCII space, i.e. 8px of the dialog
+    // font, which pushed each star name 8px right of the course name printed
+    // directly above it in the pause header. Course names lose the same kind
+    // of padding at draw time (cn_strip_course_name_decoration), but act names
+    // are also measured for centring in the star selector and the course-clear
+    // banner, so drop it here, once, instead of at every call site.
+    if (prefixByte < 0) {
+        s32 skip = 0;
+        while (skip < n && dst[skip] == ' ') {
+            skip++;
+        }
+        if (skip > 0) {
+            memmove(dst, dst + skip, (size_t) (n - skip));
+            n -= skip;
+        }
     }
 
-    dst[n++] = 0xFF;
-    dst[n++] = 0xFF;
-    memset(dst + n, 0, CN_ROM_NAME_BYTES - n);
+    // The old buffers carried a second 0xFF after the terminator; walkers that
+    // read one byte past the end relied on it. Keep that padding.
+    if (n + 1 < (s32) CN_ROM_NAME_BYTES) {
+        dst[n++] = 0xFF;
+    }
+    memset(dst + n, 0, (size_t) (CN_ROM_NAME_BYTES - n));
     return true;
 }
 
@@ -361,6 +390,9 @@ bool cn_rom_assets_load(const char *romPath) {
     // --- course / act names ------------------------------------------------
     if (!build_names()) { goto done; }
 
+    // --- dialog text (UTF-8) ------------------------------------------------
+    if (!build_dialog_strings()) { goto done; }
+
     // --- the twelve localised textures ------------------------------------
     if (!load_textures()) { goto done; }
 
@@ -431,6 +463,12 @@ u32 cn_rom_dialog_width(u32 index) {
 }
 
 const u8 *cn_rom_dialog_str(u32 index) {
+    if (index >= CN_ROM_DIALOG_COUNT) { return NULL; }
+    return sDialogStrs[index];
+}
+
+// The raw iQue pointer for one entry, straight out of segment 2.
+static const u8 *dialog_raw_str(u32 index) {
     const u8 *e = dialog_entry(index);
     u32 addr;
 
@@ -442,6 +480,35 @@ const u8 *cn_rom_dialog_str(u32 index) {
     return sSeg2 + (addr - CN_ROM_SEG_BASE);
 }
 
+// Convert all 170 dialog strings to UTF-8, once.
+//
+// Entries whose pointer does not land inside the segment stay NULL, which the
+// pack treats as "the cartridge has nothing for this id" -- the vanilla text
+// shows through for exactly those dialogs.
+static bool build_dialog_strings(void) {
+    u32 i;
+
+    for (i = 0; i < CN_ROM_DIALOG_COUNT; i++) {
+        const u8 *raw = dialog_raw_str(i);
+        s32 size;
+
+        if (raw == NULL) {
+            sDialogStrs[i] = NULL;
+            continue;
+        }
+
+        size = cn_ique_to_utf8_size(raw);
+        if (size <= 0) { return false; }
+
+        sDialogStrs[i] = (u8 *)malloc((size_t) size);
+        if (sDialogStrs[i] == NULL) { return false; }
+
+        if (cn_ique_to_utf8(raw, sDialogStrs[i], size) < 0) { return false; }
+    }
+
+    return true;
+}
+
 const u8 *cn_rom_course_name(u32 slot) {
     if (sSeg2 == NULL || slot >= CN_ROM_COURSE_COUNT) { return NULL; }
     return sCourseNames[slot];
@@ -450,6 +517,21 @@ const u8 *cn_rom_course_name(u32 slot) {
 const u8 *cn_rom_act_name(u32 index) {
     if (sSeg2 == NULL || index >= CN_ROM_ACT_MAIN_COUNT) { return NULL; }
     return sActNames[index];
+}
+
+bool cn_rom_name_contains(const u8 *str) {
+    u32 i;
+
+    if (str == NULL) { return false; }
+
+    for (i = 0; i < CN_ROM_COURSE_COUNT; i++) {
+        if (str >= sCourseNames[i] && str < sCourseNames[i] + CN_ROM_NAME_BYTES) { return true; }
+    }
+    for (i = 0; i < CN_ROM_ACT_MAIN_COUNT; i++) {
+        if (str >= sActNames[i] && str < sActNames[i] + CN_ROM_NAME_BYTES) { return true; }
+    }
+
+    return false;
 }
 
 const u8 *cn_rom_seg(u32 offset) {

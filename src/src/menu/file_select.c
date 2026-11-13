@@ -2684,6 +2684,21 @@ void print_score_file_star_score(s8 fileIndex, s16 courseIndex, s16 x, s16 y) {
 #include "game/segment7.h"
 #endif
 
+// One course-name cell of the score table.
+//
+// The table is a 12px grid (17 rows, one screen, no scrolling), which is the
+// height of the vanilla 8px menu glyph -- a 16px CN cell would overlap the row
+// below. print_menu_generic_string_compact() draws the same glyph into a 12px
+// square instead, and the " 1 " decoration is dropped because the row order
+// already fixes which course this is. Vanilla names are unaffected.
+static void print_score_file_course_name(s16 x, s16 y, const u8 *name) {
+    if (cn_is_cn_string(name)) {
+        print_menu_generic_string_compact(x, y, cn_strip_course_name_decoration(name), 12);
+    } else {
+        print_menu_generic_string(x, y, name);
+    }
+}
+
 /**
  * Prints save file score strings that shows when a save file is chosen inside the score menu.
  */
@@ -2734,7 +2749,7 @@ void print_save_file_scores(s8 fileIndex) {
 
 //! Huge print list, for loops exist for a reason!
 #define PRINT_COURSE_SCORES(courseIndex, pad) \
-    print_menu_generic_string(LEVEL_NAME_X + (pad * LEVEL_NUM_PAD), 23 + 12 * courseIndex, \
+    print_score_file_course_name(LEVEL_NAME_X + (pad * LEVEL_NUM_PAD), 23 + 12 * courseIndex, \
                               segmented_to_virtual(levelNameTable[courseIndex - 1])); \
     print_score_file_star_score(fileIndex, courseIndex - 1, STAR_SCORE_X, 23 + 12 * courseIndex); \
     print_score_file_course_coin_score(fileIndex, courseIndex - 1, 213, 23 + 12 * courseIndex);
@@ -2759,7 +2774,7 @@ void print_save_file_scores(s8 fileIndex) {
 #undef PRINT_COURSE_SCORES
 
     // Print castle secret stars text
-    print_menu_generic_string(LEVEL_NAME_X + SECRET_STARS_PAD, 23 + 12 * 16,
+    print_score_file_course_name(LEVEL_NAME_X + SECRET_STARS_PAD, 23 + 12 * 16,
                               segmented_to_virtual(levelNameTable[25]));
     // Print castle secret stars score
     print_score_file_castle_secret_stars(fileIndex, STAR_SCORE_X, 23 + 12 * 16);
