@@ -29,6 +29,7 @@ Super Mario 64 (Ch) (iQue) \[\!\]：`29047fba820695bd14c5bd7aa1aa4400`
 ## 特性
  - 简易的 djui 前端开关
  - 接近一比一复刻《神游马力欧64》
+ - 内置独立的字体系统，代码层面完全支持中文
  - 标题画面汉化支持，启用 [Vanilla SM64 Title Screen](https://mods.sm64coopdx.com/mods/vanilla-sm64-title-screen.1287/) 可以让 Coopdx 显示标题画面
  - 可与 [djui_modern](https://github.com/Shangshanruo666/djui_modern) 模块共存（**必须搭配汉化上游**，目前 djui_modern 还没有支持原版 Coopdx）
  - 热切换，切换神游资源无需重启
