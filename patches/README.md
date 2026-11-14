@@ -5,7 +5,7 @@
 | 补丁文件 | 文件数 | 适用目标 | 作用 |
 | --- | --- | --- | --- |
 | `0001-build-and-config.patch` | 3 | 四套上游共用 | `Makefile` 的 `CN_TEXT_PACK` 开关 + `configChineseText*` 三个配置项 |
-| `0002-rom-assets.patch` | 4 | 共用 | 神游 ROM 探测（`rom_checker.h`）、启动装配与改版门控（`pc_main.c`）、分段资源读取（`rom_assets.c`）、启用模组时重新判定（`mods/mods.c`） |
+| `0002-rom-assets.patch` | 3 | 共用 | 神游 ROM 探测（`rom_checker.h`）、启动装配（`pc_main.c`）、分段资源读取（`rom_assets.c`）。`mods/mods.c` 已在「改版 ⇒ 汉化整包停用」拆除时恢复成上游原样，不再出现在补丁里 |
 | `0003-text-core.patch` | 8 | 共用 | 两字节编码/字形核心、HUD 与标题文本（`print.c` / `area.c`）、课程与动作名查表（`level_info.[ch]`）、进关时切换文本表（`level_update.c`）、`text/define_*.inc.c` |
 | `0004-dialog.patch` | 5 | 共用 | 双表架构（`dialog_table.[ch]`）、对话框渲染与分页/盒高（`ingame_menu.[ch]`）、Lua 侧替换 |
 | `0005-menus.patch` | 5 | 共用 | 文件选择、选星盘、标题过场（含 iQue 标题网格） |
@@ -16,7 +16,7 @@
 
 `0001`~`0006` 必选、四套上游共用；`0007` 只在 `--frontend` 时应用；`0008` 由两个 Android 目标共用**同一份**。新增一个分组 = 加一个编号更大的文件，不需要改应用器的分组表。语言字符串与中文配置项**不是补丁**，由 `scripts/add_lang_strings.sh` / `scripts/add_cn_config.sh` 在应用阶段插入。
 
-拆分后总数 30 个文件（`0001`~`0007` 合计），`scripts/gen_all_patches.sh` 每次生成都会拿「不加分组过滤的全量差异」当参照，断言分组**无遗漏、无重复**；同时拦住两种会「同一处改动被打两遍」的残留：拆分前的单文件补丁（`0001-src-overlay.patch` 等），以及按目录分组的旧目录（`01-build/` … `08-platform/`）。
+拆分后总数 29 个文件（`0001`~`0007` 合计），`scripts/gen_all_patches.sh` 每次生成都会拿「不加分组过滤的全量差异」当参照，断言分组**无遗漏、无重复**；同时拦住两种会「同一处改动被打两遍」的残留：拆分前的单文件补丁（`0001-src-overlay.patch` 等），以及按目录分组的旧目录（`01-build/` … `08-platform/`）。
 
 四套上游与目标名的对应见仓库根 `upstream.txt`；`pc` 同时覆盖原版 CoopDX 与上善若的 PC 汉化版。
 
@@ -197,3 +197,5 @@ python3 scripts/gen_platform_patches.py \
 第 1 步会断言 `0001`~`0007` 恰好覆盖 `src/` 的全部差异（无遗漏、无重复）、都不含 `lang/`、且 `patches/` 下没有旧的分组目录与旧单文件补丁残留。第 2 步自检：`0001`~`0006`（跳过 3 个漂移文件）+ 平台补丁 + `0007` + 两个插入脚本叠加后与三方合并终态逐字节一致（`android` / `android-cn` 各 31 文件），语言字符串齐全，两个脚本复跑无改动（幂等），不应用 `0007` 时 3 个前端文件保持上游原版，平台补丁与 `0001`~`0006` 不重叠。**生成器会逐文件比对两个上游算出来的平台增量，一旦不同就直接报错**——那说明两个上游真的分道扬镳，得退回「每目标一份补丁」，而不是让共享补丁静默只对其中一个有效。
 
 语言字符串改了文案、或中文配置项改了名字时不用重生成任何补丁，只改 `scripts/add_lang_strings.sh` / `scripts/add_cn_config.sh` 里对应的常量。
+
+**手改 `0008-android.patch` 之后一定要跑 `python3 scripts/check_patch_integrity.py`。** 本机没有那两个 Android 基线时，第 2 步跑不了，改 PC 侧的 `pc_main.c` 往往只能手工同步到平台补丁里——而这里有两个不会在 PC 构建里暴露的坑：hunk 头里 `+c,d` 的计数忘了跟着改（`git apply` 报 corrupt patch，报错行号离真正出错的位置很远），以及删掉 `cn_extra/` 里某个头文件后平台补丁还留着 `#include`（PC 目标根本不走那个分支，Android CI 才炸）。这个脚本不需要任何基线就能把两种都拦住。

@@ -8,9 +8,6 @@
 #include "pc/fs/fmem.h"
 #include "pc/pc_main.h"
 #include "pc/utils/misc.h"
-#if defined(SM64COOPDX_CN_TEXT)
-#include "pc/cn_text_gate.h"
-#endif
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -166,15 +163,6 @@ void mods_activate(struct Mods* mods) {
     }
 
     mod_cache_save();
-
-#if defined(SM64COOPDX_CN_TEXT)
-    // The active set just changed. A romhack re-authors the US data the Chinese
-    // text pack sits on top of, so the pack has to be off before the first frame
-    // of the session -- otherwise iQue's tables keep serving strings over hacked
-    // ids (mangled pause menu, untranslated-but-wrong dialogs). See
-    // cn_text_gate.h rule 2.
-    cn_text_pack_romhack_refresh();
-#endif
 }
 
 static void mods_sort(struct Mods* mods) {

@@ -564,8 +564,16 @@ static const u8 *sCnUtf8Registry[CN_UTF8_REGISTRY_MAX];
 static u32 sCnUtf8RegistryCount = 0;
 static u32 sCnUtf8RegistryNext = 0;
 
+static bool cn_is_registered_utf8(const u8 *str);
+
 void cn_register_utf8_string(const u8 *str) {
     if (str == NULL) { return; }
+
+    // Registering twice is a no-op. A fixed buffer (get_level_name_sm64()'s
+    // static output, which is rewritten and re-registered every frame in the
+    // pause menu) would otherwise fill the table within seconds and start
+    // evicting the mod dialogs this registry exists for.
+    if (cn_is_registered_utf8(str)) { return; }
 
     if (sCnUtf8RegistryCount < CN_UTF8_REGISTRY_MAX) {
         sCnUtf8Registry[sCnUtf8RegistryCount++] = str;
@@ -584,6 +592,27 @@ static bool cn_is_registered_utf8(const u8 *str) {
         if (sCnUtf8Registry[i] == str) { return true; }
     }
     return false;
+}
+
+// Forget a pointer again.
+//
+// A registered buffer is *text* by identity, not by content, so a caller that
+// reuses one buffer for two encodings has to say when it stops being UTF-8.
+// That is exactly get_level_name_sm64() / get_star_name_sm64(): one static
+// buffer holds a romhack's UTF-8 name on one call and a vanilla single-byte
+// name on the next, and leaving it registered would send the second one through
+// the CN walker (glyph indices read as UTF-8 = garbage).
+void cn_unregister_utf8_string(const u8 *str) {
+    u32 i;
+
+    if (str == NULL) { return; }
+
+    for (i = 0; i < sCnUtf8RegistryCount; i++) {
+        if (sCnUtf8Registry[i] != str) { continue; }
+        sCnUtf8Registry[i] = sCnUtf8Registry[--sCnUtf8RegistryCount];
+        if (sCnUtf8RegistryNext >= sCnUtf8RegistryCount) { sCnUtf8RegistryNext = 0; }
+        return;
+    }
 }
 
 // --- CN string identification -----------------------------------------------

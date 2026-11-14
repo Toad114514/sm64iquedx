@@ -121,7 +121,7 @@ scripts/apply_patches.sh <pc|android|android-cn> <上游干净 checkout> [--fron
 
 只改 `src/pc/djui/djui_panel_misc.c`，在「设置 → 其他」里加一个「中文字库（神游）」复选框，运行时切换并持久化。
 **不应用它时功能照常可用，只是要改 `config.ini` 里的 `chinese_text` 来切换**（README 中的 UIPatch 就是它）。
-`config.ini` 只存这一个键：能不能开由启动时判定（神游 dump 在不在、有没有加载 romhack），
+`config.ini` 只存这一个键：能不能开由启动时判定（神游 dump 在不在；**加载 romhack 不再影响判定**），
 判定不过就把面板里的复选框置灰，但**不回写** `chinese_text`——否则没插卡带跑一次就会
 把玩家的选择悄悄翻成 `false`。
 
@@ -144,6 +144,7 @@ scripts/apply_patches.sh <pc|android|android-cn> <上游干净 checkout> [--fron
 | `gen_platform_patches.py --pc-base … --android … --android-cn …` | 重生成 `0008-android.patch`（两个上游共用一份），内含三方合并、冲突消解、两上游增量一致性断言与终态自检 |
 | `gen_patches.sh <上游根目录> [输出] [--only 前缀] [--exclude 前缀]` | 单个补丁生成器，按相对路径前缀筛选；`--only`/`--exclude` 可各重复多次（取并集） |
 | `test_install_args.sh` | `install.sh` 的参数自测：解析、错误路径、以及参数是否真的传到下游（桩掉 git/make/gradle，离线、不编译） |
+| `check_patch_integrity.py` | 不需要任何上游基线：断言每个补丁的 `@@ -a,b +c,d @@` 与实际行数一致（手改 `0008-android.patch` 后最容易错的地方）、补丁里 `#include` 的 `cn_*.h` 都能在 `cn_extra/` 找到（删头文件后忘了改补丁的症状是「PC 编得过、Android CI 炸」）、`cn_extra/` 与分组补丁不重叠 |
 
 `gen_patches.sh` 的行为约定（已覆盖测试）：内容相同的文件跳过；`src/` 里有而基线上没有的文件直接报错（应改放 `patches/cn_extra/`）；含 NUL 字节的二进制直接报错（`diff` 对二进制只回一句「文件不同」且退出码仍为 1，不自己判会把这句话写进补丁）；筛不出差异时写一个空补丁文件而不是保留旧文件，应用器遇到空补丁会跳过。
 
@@ -316,9 +317,9 @@ sh platform/windows/mkexe.sh --check                  # 只探测 ISCC 在不在
 
 ## 现状（快照，以 git log 为准）
 
-- `src/` 30 个文件：Makefile、text/define_{courses,text}.inc.c、`src/game|menu|pc` 下 27 个（含 `rom_checker.h`、`mods.c`、`djui_hud_utils.c`、`level_info.h`、`level_update.c`）。**`lang/English.ini` 不在其中**：它的改动只有两条字符串，由 `scripts/add_lang_strings.sh` 在应用时插入，脚本对基线跑一次即得到与实验工作区逐字节相同的文件。
-- `patches/cn_extra/` 19 个上游不存在的文件：`cn_font`、`cn_tex`、`cn_rom_assets`、`cn_unicode`（+ `cn_data/cn_unicode_map.h`）、`cn_text_gate.h`、`cn_romhack.h`、`cn_data/*.h`、`cn_intro_data.c`、`text/cn_*.inc.c`、`src/pc/rom_checker_ique.cpp`、`lang/Chinese.ini`；均已用 `git cat-file -e 8cd6e59:<path>` 确认上游不存在，且与实验工作区逐字节一致。**不收录 `src/pc/djui/{cn,emoji}_glyphs.h`**（djui_modern 的硬依赖）：那份表只有汉化上游自带，等 djui_modern 上游自己兼容，见 `patches/README.md`。
-- 补丁是 8 个平铺文件：`0001-build-and-config.patch`(3) / `0002-rom-assets.patch`(4) / `0003-text-core.patch`(8) / `0004-dialog.patch`(5) / `0005-menus.patch`(5) / `0006-asset-overlay.patch`(2) 必选共用，`0007-djui-frontend.patch`(3) 可选，`0008-android.patch`(3) 仅两个 Android 目标（共用一份）。共 30 个已改文件，一组一个文件、互不重叠；都不含任何 `lang/*.ini`，`configfile.c` 的中文配置项由 `scripts/add_cn_config.sh` 插。
-- 校验：`8cd6e59` + `0001`~`0007` + `cn_extra/` + `add_lang_strings.sh` 与 `src/` 逐字节一致（30 个已改文件全中，含 `Makefile`），`lang/English.ini` 与实验工作区一致；两个 Android 上游（`0001`~`0006` + 共享 `0008-android.patch` + `0007-djui-frontend.patch` + 两个插入脚本）应用后与三方合并终态各 31 文件逐字节一致；三套基线首次应用 + 幂等复跑均通过；`cn_extra` 19/19 一致，无冲突标记残留。
+- `src/` 29 个文件：Makefile、text/define_{courses,text}.inc.c、`src/game|menu|pc` 下 26 个（含 `rom_checker.h`、`djui_hud_utils.c`、`level_info.h`、`level_update.c`）。**`lang/English.ini` 不在其中**：它的改动只有两条字符串，由 `scripts/add_lang_strings.sh` 在应用时插入，脚本对基线跑一次即得到与实验工作区逐字节相同的文件。**`mods/mods.c` 也不再算已改文件**：「改版 ⇒ 汉化整包停用」拆除后它已恢复成上游原样，文件留在 `src/` 里只是占位，补丁里不会出现。
+- `patches/cn_extra/` 19 个上游不存在的文件：`cn_font`、`cn_tex`、`cn_rom_assets`、`cn_unicode`（+ `cn_data/cn_unicode_map.h`、`cn_data/cn_unicode_alias.h`）、`cn_text_gate.h`、`cn_data/*.h`、`cn_intro_data.c`、`text/cn_*.inc.c`、`src/pc/rom_checker_ique.cpp`、`lang/Chinese.ini`；均已用 `git cat-file -e 8cd6e59:<path>` 确认上游不存在，且与实验工作区逐字节一致。**不收录 `src/pc/djui/{cn,emoji}_glyphs.h`**（djui_modern 的硬依赖）：那份表只有汉化上游自带，等 djui_modern 上游自己兼容，见 `patches/README.md`。`src/pc/cn_romhack.h` 已随「改版 ⇒ 汉化整包停用」的拆除一起删除，不要再加回来。
+- 补丁是 8 个平铺文件：`0001-build-and-config.patch`(3) / `0002-rom-assets.patch`(3) / `0003-text-core.patch`(8) / `0004-dialog.patch`(5) / `0005-menus.patch`(5) / `0006-asset-overlay.patch`(2) 必选共用，`0007-djui-frontend.patch`(3) 可选，`0008-android.patch`(3) 仅两个 Android 目标（共用一份）。共 29 个已改文件，一组一个文件、互不重叠；都不含任何 `lang/*.ini`，`configfile.c` 的中文配置项由 `scripts/add_cn_config.sh` 插。
+- 校验：`8cd6e59` + `0001`~`0007` + `cn_extra/` + `add_lang_strings.sh` 与 `src/` 逐字节一致（29 个已改文件全中，含 `Makefile`），`lang/English.ini` 与实验工作区一致；两个 Android 上游（`0001`~`0006` + 共享 `0008-android.patch` + `0007-djui-frontend.patch` + 两个插入脚本）应用后与三方合并终态各 31 文件逐字节一致；三套基线首次应用 + 幂等复跑均通过；`cn_extra` 19/19 一致，无冲突标记残留。**不需要任何基线也能跑的自检**：`scripts/check_patch_integrity.py`（hunk 计数自洽、补丁 `#include` 的 `cn_*.h` 必须存在于 `cn_extra/`、`cn_extra/` 与分组补丁不得重叠）。
 - `platform/`：DEBIAN（`control.in` + `mkdeb.sh`）、pacman（`PKGBUILD` + `.install`）、rpm（`sm64coopdx-iquedx.spec` + `mkrpm.sh`）、darwin（`Info.plist.in` + `mkmac.sh`）、freedesktop（`.desktop` + PNG 图标 + `install.sh`）。
 - 汉化版上游自带的 `palettes/*.ini`、`src/pc/djui/*_glyphs.h`、`textures/custom_font/*.png` 属于所选上游本身，不在本仓库收录范围；它自带的 `lang/Chinese.ini` 也不会被 `cn_extra/` 覆盖（只补缺）。

@@ -34,8 +34,12 @@
 // A UTF-8 character with no glyph in the atlas is drawn as '?', which is the
 // only failure mode the renderer has: no string is ever silently skipped.
 //
-// Nothing has to ask "is this Chinese?" any more. An English string, a Chinese
-// string and a mod's mixed string all walk the same loop.
+// One loop reads all three; what the *renderer* has to ask is a different and
+// narrower question -- does this string contain a 16x16 CJK glyph (which needs
+// the 20px pitch) -- see cn_string_has_wide(). And cn_utf8_to_engine() asks a
+// third one: can the whole string be spelled with the vanilla font, in which
+// case it is not Chinese text at all and goes back through the original
+// renderer, punctuation and all.
 //
 // --- the icon escape -------------------------------------------------------
 //
@@ -82,6 +86,11 @@ CnChar cn_read_char(const u8 *str, s32 index);
 u16 cn_unicode_to_code(u32 cp);      // 0 when the atlas has no such character
 u32 cn_code_to_unicode(u16 code);    // 0 when the code is not in the atlas
 
+// The stand-in for a codepoint the atlas cannot draw (『 -> “, é -> e,
+// ！ -> !), or 0 when there is none. cn_read_char() applies it automatically;
+// exposed so a verifier can enumerate what a mod will actually look like.
+u32 cn_unicode_alias(u32 cp);
+
 // Encode one code point as UTF-8 into `out`; returns the byte count (1-4).
 s32 cn_utf8_encode(u32 cp, u8 *out);
 
@@ -112,6 +121,46 @@ u8 cn_ascii_to_dialog_char(u8 ascii);
 // This is what lets smlua_replace_dialog() and HOOK_ON_DIALOG hand over
 // Chinese text without losing it to an ASCII-only conversion.
 u8 *cn_text_from_utf8(const char *src);
+
+// Does this string need that treatment at all? True when it holds any byte
+// outside ASCII, i.e. when the vanilla single-byte font cannot draw it.
+bool cn_utf8_has_multibyte(const char *src);
+
+// The same conversion, into a buffer the caller already owns. Used where the
+// result has to live in a fixed static buffer instead of a heap allocation --
+// get_level_name_sm64() / get_star_name_sm64() hand out a romhack's own level
+// and star names that way.
+//
+// When the text contains nothing only the atlas can draw (no CJK glyph, no
+// kana), the result is the *vanilla* single-byte encoding and `dst` is NOT
+// registered: an English string keeps the English font, its own punctuation
+// and the US dialog layout. See cn_utf8_to_ascii().
+//
+// `dst` must outlive the call; otherwise it is registered with
+// cn_register_utf8_string() so the renderers can recognise it (they only ever
+// see a pointer). Returns the number of bytes written excluding the terminator,
+// or -1 when it does not fit (dst is terminated either way).
+s32 cn_utf8_to_engine(u8 *dst, s32 cap, const char *src);
+
+// The vanilla-font spelling of a UTF-8 string, into `out` (NUL-terminated).
+//
+// Every character that only the atlas can draw makes this fail (-1): that is
+// the test cn_utf8_to_engine() uses to decide whether a string is Chinese text
+// at all. Everything else is replaced by the spelling sSm64CharMap knows --
+// 『 -> <<, — -> -, ● -> *, é -> e -- so the result can go straight through
+// convert_string_ascii_to_sm64().
+//
+// Exposed for the host-side test; nothing in the renderer calls it directly.
+s32 cn_utf8_to_ascii(char *out, s32 cap, const char *src);
+
+// Does this string contain a full-width CJK cell?
+//
+// Decides the dialog line pitch: a 16x16 CJK glyph needs 20px of line spacing
+// so it does not touch the line below, while a string of 8px ASCII (however
+// many vanilla icon tiles it also holds) is authored for the 16px pitch the
+// game has always used. Answering with cn_is_cn_string() instead would give
+// every romhack dialog 20px gaps, because a mod's string is UTF-8 too.
+bool cn_string_has_wide(const u8 *str);
 
 // Width in pixels of one decoded character, given the vanilla width table.
 // (Defined here so every caller agrees; the table itself lives in

@@ -11,7 +11,7 @@
 # 顺序**（`sort` 即顺序，不另存 manifest）：
 #
 #   0001-build-and-config.patch  构建开关 configChineseText* / Makefile 的 CN_TEXT_PACK
-#   0002-rom-assets.patch        神游 ROM 探测、资源分段读取、启动时装配、改版门控
+#   0002-rom-assets.patch        神游 ROM 探测、资源分段读取、启动时装配
 #   0003-text-core.patch         编码/字形核心、HUD 与标题文本、课程/动作名查表
 #   0004-dialog.patch            对话框表与渲染、Lua 侧对话框替换
 #   0005-menus.patch             文件选择、选星盘、标题过场
@@ -69,6 +69,8 @@ gen_group 0001-build-and-config.patch \
     src/pc/configfile.h
 
 echo "— 0002-rom-assets —" >&2
+# mods/mods.c 目前与上游一致（「改版 ⇒ 汉化整包停用」已拆除），留在这里只是
+# 让「模组加载后再判定一次」那类改动重新出现时自动落进本组。
 gen_group 0002-rom-assets.patch \
     src/pc/rom_checker.h \
     src/pc/rom_assets.c \

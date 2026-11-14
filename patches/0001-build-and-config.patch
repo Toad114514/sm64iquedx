@@ -95,14 +95,15 @@
      // CoopNet settings
 --- a/src/pc/configfile.h
 +++ b/src/pc/configfile.h
-@@ -165,6 +165,11 @@
+@@ -165,6 +165,12 @@
  extern bool         configMenuDemos;
  extern bool         configDisablePopups;
  extern char         configLanguage[MAX_CONFIG_STRING];
 +// Chinese (iQue) text pack. This is the player's wish, i.e. only the position of
 +// the settings checkbox; it is *not* the live state. Whether the pack can
 +// actually run is decided by cn_text_pack_target() (cn_text_gate.h): the iQue
-+// dump has to be there and no enabled mod may replace the game's own data.
++// dump has to be there. Mods (romhacks included) are not a reason to disable it
++// -- the pack defers to whatever a mod installed, entry by entry.
 +extern bool         configChineseText;
  extern bool         configForce4By3;
  extern bool         configDynosLocalPlayerModelOnly;

@@ -347,10 +347,15 @@ void print_act_selector_strings(void) {
         // keep it centred on the same spot. The official iQue build makes the
         // same correction (it moves this line from y = 33 to y = 30).
         bool const cnName = cn_is_cn_string(currLevelName);
-        // The CN name was stripped above, so it has no prefix left to skip;
-        // the vanilla one still has its 3 bytes. Chopping three bytes off a
-        // UTF-8 name would eat one whole character.
-        const u8 *levelNameText = cnName ? currLevelName : currLevelName + 3;
+        // A CN name has no vanilla 3-byte prefix to skip, and chopping three
+        // bytes off UTF-8 would eat one whole character. It may still carry the
+        // " N " decoration -- the course-table entry always does, and so does a
+        // romhack's own level name coming through get_level_name_sm64(), which
+        // this screen prints the separate course number next to. The strip is
+        // idempotent and leaves a name without a number alone.
+        const u8 *levelNameText = cnName
+            ? cn_strip_course_name_decoration(currLevelName)
+            : currLevelName + 3;
 
         s16 lvlNameY = cnName ? 30 : 33;
 #ifdef VERSION_EU

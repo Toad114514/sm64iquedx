@@ -41,6 +41,7 @@
 #include "pc/dialog_table.h"
 #include "cn_font.h"
 #include "cn_unicode.h"
+#include "cn_rom_assets.h"
 
 // CN-aware course/act name lookups. Declared in ingame_menu.h (star_select.c
 // needs them too) and defined further down in this file.
@@ -55,26 +56,45 @@
 #define CN_PACK_ACTIVE() false
 #endif
 
-// Is the dialog on screen laid out with iQue metrics?
+// Is the dialog on screen laid out with iQue *page* metrics?
+//
+// Two separate questions live in this file, and they do not have the same
+// answer:
+//
+//   CN_DIALOG_PITCH()  20px line spacing -- a property of the glyphs. True
+//                      when the string contains a 16x16 CJK cell, because
+//                      those need the extra 4px or they touch the line below.
+//                      A romhack's "★★★★ ... Super Mario Star Road" has no CJK
+//                      in it, so it keeps the 16px pitch its author wrote for.
+//
+//   CN_DIALOG_LAYOUT() one line fewer per page, and the 20px-pitch marker
+//                      offsets that go with it. True only for the strings the
+//                      pack itself installed from the cartridge (a `replaced`
+//                      entry always keeps the page break its author asked for:
+//                      smlua_text_utils_dialog_replace() passes linesPerBox and
+//                      the text depends on it).
 //
 // Read from the string that will actually be drawn, NOT from the pack switch.
 // The two normally agree, but Lua can break the tie: a mod (or a romhack --
 // they all go through smlua_text_utils_dialog_replace()) may overwrite a
-// dialog with its own English text, and apply_cn_text_pack() deliberately
-// leaves `replaced` entries alone, so the text stays English while the switch
-// is on. Deriving the geometry from the switch drew exactly that string with
-// CN metrics: 20px line pitch instead of 16, one line fewer per page and a
-// taller box. Layout is a property of the glyphs, so it has to follow the
-// glyphs (see `cn_dialog_registry` / cn_is_cn_string()).
+// dialog with its own text, and apply_cn_text_pack() deliberately leaves
+// `replaced` entries alone. Deriving the geometry from the switch drew an
+// English dialog with CN metrics; deriving it from "is this UTF-8" drew a
+// romhack's Star Road title with CN metrics too (20px gaps, 3 lines per page
+// where the mod asked for 4). Layout is a property of the glyphs and of the
+// author's page break, so it has to follow those two.
 //
 // Set once per frame at the top of render_dialog_entries(); every geometry
 // decision below (box height, line pitch, page length, the two triangles) is
 // reached from that function with the same dialog.
 #if defined(SM64COOPDX_CN_TEXT)
 static bool sDialogLayoutCn = false;
+static bool sDialogPitchCn = false;
 #define CN_DIALOG_LAYOUT() (sDialogLayoutCn)
+#define CN_DIALOG_PITCH() (sDialogPitchCn)
 #else
 #define CN_DIALOG_LAYOUT() false
+#define CN_DIALOG_PITCH() false
 #endif
 
 // ---------------------------------------------------------------------------
@@ -1628,13 +1648,14 @@ void render_dialog_box_type(struct DialogEntry *dialog, s8 linesPerBox) {
     // hangs out of the box. The real answer is 6*20/80 + 0.1 = 1.6 = 128px.
     //
     // Same runtime decision as the strings, like everything else here: a
-    // Lua-replaced English dialog keeps the US line height and the US box.
+    // Lua-replaced English dialog keeps the US line height and the US box, and
+    // so does a romhack's ASCII title with vanilla icon tiles in it.
     f32 lineHeight = 16.0f;
 #if defined(VERSION_JP) || defined(VERSION_SH)
     lineHeight = 20.0f;
 #endif
 #if defined(SM64COOPDX_CN_TEXT)
-    if (CN_DIALOG_LAYOUT()) {
+    if (CN_DIALOG_PITCH()) {
         lineHeight = 20.0f;
     }
 #endif
@@ -1713,10 +1734,10 @@ void render_generic_dialog_char_at_pos(struct DialogEntry *dialog, s16 x, s16 y,
 
 // iQue spaces dialog lines 20px apart (vs the US 16) so a 16px CJK glyph and
 // its shadow do not touch the line below. Y_VAL3 is a compile-time constant, so
-// the CN value has to be selected at each use -- from the per-dialog layout
-// flag, not from the pack switch (see CN_DIALOG_LAYOUT()).
+// the CN value has to be selected at each use -- from the per-dialog pitch
+// flag, not from the pack switch (see CN_DIALOG_PITCH()).
 #if defined(SM64COOPDX_CN_TEXT)
-#define CN_DIALOG_LINE_H() (CN_DIALOG_LAYOUT() ? 20 : Y_VAL3)
+#define CN_DIALOG_LINE_H() (CN_DIALOG_PITCH() ? 20 : Y_VAL3)
 #else
 #define CN_DIALOG_LINE_H() (Y_VAL3)
 #endif
@@ -1726,14 +1747,19 @@ void render_generic_dialog_char_at_pos(struct DialogEntry *dialog, s16 x, s16 y,
 // that formula's shape but passes `linesPerBox` itself, so its pages are one
 // line shorter -- the freed line is spent on the one-line-taller box.
 //
+// `ique` is true only for the strings the cartridge supplied, never for a mod's
+// replacement: a romhack writes its own line breaks for the page length it
+// passes to smlua_text_utils_dialog_replace(), so shortening its page drops a
+// line per page for no reason (Star Road asks for 4 and got 3).
+//
 // Everything that measures "one page" must use this, not linesPerBox: the
 // scissor window (a window one line taller lets the next page slide into the
 // bottom of the box mid-scroll), the scroll distance (one line too far and the
 // text jumps back when the page flips) and the line index under the scroll.
 #if defined(SM64COOPDX_CN_TEXT)
-#define CN_DIALOG_PAGE_LINES(linesPerBox, cn) (((cn) && (linesPerBox) > 1) ? (linesPerBox) - 1 : (linesPerBox))
+#define CN_DIALOG_PAGE_LINES(linesPerBox, ique) (((ique) && (linesPerBox) > 1) ? (linesPerBox) - 1 : (linesPerBox))
 #else
-#define CN_DIALOG_PAGE_LINES(linesPerBox, cn) (linesPerBox)
+#define CN_DIALOG_PAGE_LINES(linesPerBox, ique) (linesPerBox)
 #endif
 
 #ifdef VERSION_EU
@@ -1910,6 +1936,11 @@ void handle_dialog_text_and_pages(s8 colorMode, struct DialogEntry *dialog, s8 l
     // Hoisted: the encoding cannot change mid-dialog, and cn_is_cn_string() is
     // a table scan that would otherwise run once per glyph below.
     bool cn = cn_is_cn_string(str);
+    // iQue's one-line-shorter page applies to the cartridge's own strings only:
+    // a mod passed its own linesPerBox together with its own line breaks, so its
+    // page length is not ours to shorten (see CN_DIALOG_PAGE_LINES).
+    bool cnPage = cn && !dialog->replaced;
+    (void) cnPage; // CN_DIALOG_PAGE_LINES() ignores it when the pack is compiled out
 
     s8 totalLines;
 
@@ -1934,9 +1965,9 @@ void handle_dialog_text_and_pages(s8 colorMode, struct DialogEntry *dialog, s8 l
     if (gDialogBoxState == DIALOG_STATE_HORIZONTAL) {
         // If scrolling, consider the number of lines for both
         // the current page and the page being scrolled to.
-        totalLines = CN_DIALOG_PAGE_LINES(linesPerBox, cn) * 2 + 1;
+        totalLines = CN_DIALOG_PAGE_LINES(linesPerBox, cnPage) * 2 + 1;
     } else {
-        totalLines = CN_DIALOG_PAGE_LINES(linesPerBox, cn) + 1;
+        totalLines = CN_DIALOG_PAGE_LINES(linesPerBox, cnPage) + 1;
     }
 
     gSPDisplayList(gDisplayListHead++, dl_ia_text_begin);
@@ -1957,7 +1988,7 @@ void handle_dialog_text_and_pages(s8 colorMode, struct DialogEntry *dialog, s8 l
         // would jerk the text back by the remainder. Clamping the lookahead to
         // one page makes the final frame land exactly on the next page's first
         // line, which is what the redraw that follows shows.
-        s32 pageHeight = CN_DIALOG_PAGE_LINES(linesPerBox, cn) * CN_DIALOG_LINE_H();
+        s32 pageHeight = CN_DIALOG_PAGE_LINES(linesPerBox, cnPage) * CN_DIALOG_LINE_H();
 
         sDialogOffset = gDialogScrollOffsetY + dialog->linesPerBox * 2;
         if (sDialogOffset > pageHeight) {
@@ -2259,17 +2290,20 @@ void render_dialog_triangle_choice(void) {
 
     // Choice marker geometry. iQue's CN build moves the marker a 20px line
     // lower (Y_VAL4_2 20 vs 16) and its X term is ((n - 1) * 58) + 0; this
-    // function's folded `n * X - C` form expresses that as 58 / 58. Follow the
-    // dialog's own layout (CN_DIALOG_LAYOUT), since a Lua-replaced English
-    // dialog keeps the US 16px pitch no matter what the pack switch says.
+    // function's folded `n * X - C` form expresses that as 58 / 58. The
+    // vertical term tracks the line pitch (a 20px page pushes the marker down
+    // by 20); the X term is part of the iQue layout proper. A Lua-replaced
+    // English dialog keeps the US 16px pitch no matter what the pack says.
     s32 xVal4_1 = X_VAL4_1;
     s32 xVal4_2 = X_VAL4_2;
     s32 yVal4_2 = Y_VAL4_2;
 #if defined(SM64COOPDX_CN_TEXT)
+    if (CN_DIALOG_PITCH()) {
+        yVal4_2 = 20;
+    }
     if (CN_DIALOG_LAYOUT()) {
         xVal4_1 = 58;
         xVal4_2 = 58;
-        yVal4_2 = 20;
     }
 #endif
 
@@ -2318,7 +2352,7 @@ void render_dialog_string_color(s8 linesPerBox) {
     // so it still sits at the bottom edge of the (one line taller) CN box.
     s32 yVal5_1 = Y_VAL5_1;
 #if defined(SM64COOPDX_CN_TEXT)
-    if (CN_DIALOG_LAYOUT()) {
+    if (CN_DIALOG_PITCH()) {
         yVal5_1 = -18;
     }
 #endif
@@ -2447,19 +2481,28 @@ void render_dialog_entries(void) {
     }
 
     // Every geometry decision for this frame (box height, line pitch, page
-    // length, choice / next-page triangles) is derived from this one flag, so
-    // it is decided here, once, from the string the text renderer will draw.
-    // With the two tables (src/pc/dialog_table.c) that string is either wholly
-    // Chinese or wholly the US text -- there is no per-entry mixing left -- but
-    // the flag is still taken from the string rather than from the switch, so
-    // the geometry can never disagree with the glyphs. A HOOK_ON_DIALOG
-    // override is always ASCII here (the pack drops overrides for the dialogs
-    // it covers), hence vanilla layout.
-    // See CN_DIALOG_LAYOUT() at the top of the file.
+    // length, choice / next-page triangles) is derived from the two flags set
+    // below, so they are decided here, once, from the string the text renderer
+    // will draw and from whether that string is the cartridge's or a mod's.
+    // Taking them from the pack switch instead put a romhack's own English
+    // dialog in CN metrics; taking the page length from "is this UTF-8" put a
+    // romhack's Chinese-capable string in CN metrics too (Star Road's title
+    // asked for 4 lines a page and got 3).
+    // See CN_DIALOG_LAYOUT() / CN_DIALOG_PITCH() at the top of the file.
 #if defined(SM64COOPDX_CN_TEXT)
-    sDialogLayoutCn = cn_is_cn_string(sOverrideDialogHookString != NULL
-                                      ? sOverrideDialogHookString
-                                      : (const u8 *) segmented_to_virtual(dialog->str));
+    {
+        const u8 *layoutStr = sOverrideDialogHookString != NULL
+                            ? sOverrideDialogHookString
+                            : (const u8 *) segmented_to_virtual(dialog->str);
+        bool const layoutCn = cn_is_cn_string(layoutStr);
+
+        // 20px spacing is needed by 16x16 CJK cells and by nothing else. A
+        // romhack's English title with vanilla star tiles is authored for 16.
+        sDialogPitchCn = layoutCn && cn_string_has_wide(layoutStr);
+        // The shorter iQue page belongs to the cartridge's strings; a mod keeps
+        // the page length it asked for.
+        sDialogLayoutCn = layoutCn && !dialog->replaced;
+    }
 #endif
 
     // Line pitch, page length, and the same two numbers folded into the
@@ -2481,14 +2524,15 @@ void render_dialog_entries(void) {
     // runs a whole line past the page break, so the text jerks backwards when
     // the page flips.
     //
-    // Chosen from CN_DIALOG_LAYOUT(), like every other geometry value here: a
-    // Lua-replaced English dialog keeps the US pitch and the US window even
-    // when the pack is on.
+    // Chosen from the two per-dialog flags, like every other geometry value
+    // here: a Lua-replaced English dialog keeps the US pitch and the US window
+    // even when the pack is on, and so does a romhack title full of vanilla
+    // icon tiles.
     s32 diagPitch = DIAG_VAL1;
     s32 diagRowsPerBox = DIAG_VAL4;
     s32 diagPageLines = CN_DIALOG_PAGE_LINES(dialog->linesPerBox, CN_DIALOG_LAYOUT());
 #if defined(SM64COOPDX_CN_TEXT)
-    if (CN_DIALOG_LAYOUT()) {
+    if (CN_DIALOG_PITCH()) {
         diagPitch = 20;
         diagRowsPerBox = 4;
     }
@@ -3043,7 +3087,16 @@ void render_pause_my_score_coins(void) {
         // still has to supply the synthetic castle/ending names.
         const u8 *cnName = (gCurrCourseNum >= COURSE_MIN && gCurrCourseNum <= COURSE_STAGES_MAX)
             ? ingame_menu_get_course_name(gCurrCourseNum) : NULL;
-        if (cnName != NULL) { courseName = (u8 *)cn_strip_course_name_decoration(cnName); }
+        if (cnName != NULL) {
+            courseName = (u8 *)cn_strip_course_name_decoration(cnName);
+        } else if (cn_is_cn_string(courseNameRaw)) {
+            // A romhack's own level name: get_level_name_sm64() handed the
+            // UTF-8 text straight through (custom levels are not in the course
+            // table at all). It still carries the " N " prefix that this line
+            // prints itself, so peel it the same way -- `+ 3` above would be
+            // wrong the moment the number has two digits.
+            courseName = (u8 *)cn_strip_course_name_decoration(courseNameRaw);
+        }
     }
     u8 *actName = (u8*) get_star_name_sm64(gCurrCourseNum, starIndex, 1);
     if (cnPack) {
@@ -3446,32 +3499,43 @@ void render_pause_castle_course_stars(s16 x, s16 y, s16 fileNum, s16 courseNum) 
     print_generic_string(x + 14, y + 13, str);
 }
 
-// What to hand the course-name renderer for a *main* course slot.
+// What to hand the course-name renderer in the castle course list.
 //
-// The upstream renderer passes the table entry whole, and that is correct: the
-// 3-byte prefix on a vanilla main-course entry is not decoration, it is the
-// course number. Read straight out of the US ROM:
+// This screen has NO column of its own for the course number: the number has to
+// be part of the string that gets drawn. Upstream therefore does not read the
+// course-name table here at all -- it calls get_level_name_sm64(), which formats
+// " N <name>" itself (level_info.c). The table entry alone cannot be used:
 //
-//   BOB    9E 01 9E "BOB-OMB BATTLEFIELD"      ->  " 1 BOB-OMB BATTLEFIELD"
-//   WF     9E 02 9E "WHISKY'S FOUNTAIN"        ->  " 2 ..."
-//   SL     01 00 9E "SLIPPERY SLIDE"          ->  " 10 ..."  (two-digit)
-//   BITDW  9E 9E 9E "BOWSER IN THE DARK WORLD" ->  no number, 3 blanks
+//   vanilla ROM      9E 01 9E "BOB-OMB BATTLEFIELD"   ->  " 1 BOB-OMB ..."
+//   CN pack          " 1 " + "　1　" + 中文名          ->  two number layers
+//   romhack replacement                                  ->  NO number at all
 //
-// Only the star-select screen strips it, via &courseName[CRS_NAME_START],
-// because it draws "COURSE x" out of a separate column. The pause menu has no
-// such column, so skipping the prefix there silently deleted the number -- the
-// "关卡前应该有数字" bug. Hence main courses pass the base pointer, while the
-// secret-star / castle-star slots keep `+ 3`: their prefix is three blank
-// glyphs, so dropping it would shift the name left for no gain.
+// The last line is the "关卡名前面缺了数字" bug. smlua_text_utils_course_acts_replace()
+// drops the first three characters of the name a mod supplies -- Star Road writes
+// " 1 BOB-OMB ISLANDS" and the table gets "BOB-OMB ISLANDS" -- because upstream
+// re-adds the number through get_level_name_sm64(). Our CN work replaced that
+// upstream call with a direct table read (get_level_name_ascii() deliberately
+// reads the vanilla mirror, so it cannot return Chinese), which silently threw
+// the number away for every mod.
 //
-// The CN side needs no such test. iQue's course-name table carries NO 3-byte
-// prefix -- in the CN ROM the entry starts straight at the U+3000 run (checked
-// against the decompressed segment; official CRS_NAME_START is 6, i.e. three
-// two-byte tokens, not three bytes). Our generator prepends a synthetic
-// [9E][n][9E] so the `+ 3` call sites keep working, so CN buffers must still be
-// advanced past it.
+// So the source is chosen by who owns the table slot, not by the encoding:
+//   * our own CN buffer -> drop only the loader's synthetic 3-byte prefix, the
+//     cartridge's own " N " stays and supplies the number;
+//   * anything else (vanilla, or a mod's heap string) -> upstream's helper,
+//     which rebuilds " N <name>" in whichever encoding that name uses;
+//   * secret / castle / flag rows -> no number to show, keep the historic `+3`
+//     that drops the three leading blank glyphs.
 static const u8 *pause_castle_course_name_arg(const u8 *courseName) {
-    return cn_is_cn_string(courseName) ? courseName + 3 : courseName;
+    if (gDialogLineNum < 0 || gDialogLineNum >= COURSE_STAGES_COUNT) {
+        return cn_is_cn_string(courseName) ? courseName + 3 : courseName;
+    }
+
+    if (CN_PACK_ACTIVE() && cn_rom_name_contains(courseName)) {
+        return courseName + 3;
+    }
+
+    s16 courseNum = (s16) (gDialogLineNum + 1);
+    return get_level_name_sm64(courseNum, get_level_num_from_course_num(courseNum), 1, 1);
 }
 
 void render_pause_castle_main_strings(s16 x, s16 y) {
@@ -3545,9 +3609,9 @@ void render_pause_castle_main_strings(s16 x, s16 y) {
     }
 
 #ifndef VERSION_EU
-    // Upstream draws the entry whole at x - 9. On a main course the 3-byte
-    // prefix IS the course number, so this is what puts "1" in front of
-    // "BOB-OMB BATTLEFIELD"; see pause_castle_course_name_arg().
+    // Upstream draws the entry whole at x - 9. The string must carry its own
+    // course number -- this screen has no separate number column; see
+    // pause_castle_course_name_arg() for how that number is sourced.
     print_generic_string(x - 9, y + 30, pause_castle_course_name_arg(courseName));
 #endif
 
@@ -3588,6 +3652,48 @@ void render_pause_castle_main_strings(s16 x, s16 y) {
 // It takes the *base* pointer, so it removes the decoration of a name that
 // still carries its prefix. Callers that already added +3 get their string
 // back unchanged, because a bare name has no leading digits.
+// Peel ONE decoration layer: [spaces][digits][spaces]. Returns the pointer just
+// past it, or `name` itself when there is nothing to peel.
+//
+// The "no digits" case still reports the move when the string merely starts
+// with blanks (the secret-star slots indent with spaces only); the caller's
+// loop then peels nothing more, because a bare name has no leading blanks left.
+static const u8 *cn_peel_one_decoration(const u8 *name) {
+    const u8 *p = name;
+    const u8 *digits;
+    const u8 *afterDigits;
+
+    while (*p == ' ') {
+        p++;
+    }
+
+    digits = p;
+    while (*p >= '0' && *p <= '9') {
+        p++;
+    }
+
+    if (p == digits) {
+        return p;
+    }
+
+    afterDigits = p;
+    while (*p == ' ') {
+        p++;
+    }
+
+    // Require the trailing run: a name that merely starts with a digit
+    // ("10 Coins Star" style) must not lose it.
+    if (p == afterDigits) {
+        return name;
+    }
+
+    return p;
+}
+
+// Peel every " N " layer. Callers that print the course number themselves
+// (pause header, star select, file select, course-clear banner) want the bare
+// name; the castle course list does not -- it has no number column and gets its
+// number from pause_castle_course_name_arg() instead.
 const u8 *cn_strip_course_name_decoration(const u8 *name) {
     const u8 *p = name;
     s32 pass;
@@ -3597,37 +3703,12 @@ const u8 *cn_strip_course_name_decoration(const u8 *name) {
     }
 
     for (pass = 0; pass < 4; pass++) {
-        const u8 *digits;
-        const u8 *afterDigits;
+        const u8 *next = cn_peel_one_decoration(p);
 
-        while (*p == ' ') {
-            p++;
-        }
-
-        digits = p;
-        while (*p >= '0' && *p <= '9') {
-            p++;
-        }
-
-        if (p == digits) {
-            // No number at this layer: the spaces we just skipped are the whole
-            // decoration (the secret-star slots indent with spaces only). Return
-            // the start of the text rather than `name + 3` -- three bytes into a
-            // UTF-8 string can land in the middle of a character.
+        if (next == p) {
             break;
         }
-
-        afterDigits = p;
-        while (*p == ' ') {
-            p++;
-        }
-
-        // Require the trailing run: a name that merely starts with a digit
-        // ("10 Coins Star" style) must not lose it.
-        if (p == afterDigits) {
-            p = digits;
-            break;
-        }
+        p = next;
     }
 
     return p;
@@ -3818,9 +3899,10 @@ void render_pause_castle_main_strings_extended(s16 x, s16 y) {
     // as runs of spaces / raw bytes and the renderer then produced garbage.
     //
     // The table is already switched by apply_cn_text_pack(), so this returns CN
-    // text when the pack is on and the vanilla ROM string when it is off.
-    // Main courses keep the base pointer (the 3-byte prefix holds the course
-    // number); see pause_castle_course_name_arg() for the full story.
+    // text when the pack is on and the vanilla ROM string when it is off. Only
+    // our own CN buffers are drawn as-is: a mod's replacement has no course
+    // number at all, so pause_castle_course_name_arg() sends those (and the
+    // pack-off vanilla entries) back through get_level_name_sm64().
     const u8 *courseName;
     {
         void **courseNameTbl = get_course_name_table();

@@ -212,16 +212,7 @@ void rom_assets_load(void) {
     // come out of the same rom, so it has to. Loading here is idempotent; the
     // startup path later just finds it already done.
     bool const packData = cn_rom_assets_ready() || cn_rom_assets_load(rom_checker_ique_rom_path());
-    cn_tex_on_rom_loaded(cn_text_pack_target(packData,
-                                             configChineseText,
-                                             // Mods are not known yet on this thread
-                                             // (mods_init() runs later), so this is
-                                             // the current answer, not the final
-                                             // one: chinese_text_pack_init()
-                                             // re-runs the gate and calls
-                                             // cn_tex_apply(false) if a romhack
-                                             // showed up in the meantime.
-                                             gCnTextPackRomhack));
+    cn_tex_on_rom_loaded(cn_text_pack_target(packData, configChineseText));
 }
 
 void rom_assets_queue(void* ptr, enum RomAssetType assetType, u32 physicalAddress, u32 physicalSize, u32 segmentedAddress, u32 segmentedSize) {

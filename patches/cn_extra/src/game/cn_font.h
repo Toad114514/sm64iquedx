@@ -159,6 +159,15 @@ bool cn_is_cn_string(const u8 *str);
 // its UTF-8 fast path (it would be walked as vanilla bytes), never a crash.
 void cn_register_utf8_string(const u8 *str);
 
+// Forget a previously registered pointer.
+//
+// Registration is by identity, not by content, so a caller that reuses one
+// buffer for both encodings has to unregister before it writes a vanilla string
+// into it. get_level_name_sm64() / get_star_name_sm64() do exactly that: their
+// static buffer holds a romhack's UTF-8 name on one call and a vanilla name on
+// the next.
+void cn_unregister_utf8_string(const u8 *str);
+
 // ---------------------------------------------------------------------------
 // Fixed UI labels (pause menu, Lakitu hint box, HUD).
 //

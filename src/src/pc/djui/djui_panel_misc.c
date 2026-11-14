@@ -57,10 +57,15 @@ static void djui_panel_misc_chinese_text_changed(UNUSED struct DjuiBase* checkbo
 }
 
 // The pack's glyphs, dialog text and textures are read out of the player's own
-// 神游 dump at startup, and a romhack re-authors the very data the pack would sit
-// on top of. In both cases the switch cannot do anything, so it is greyed out
-// (DJUI paints a disabled interactable in grey and refuses the click) rather
-// than tapping into a no-op.
+// 神游 dump at startup. Without that dump the switch cannot do anything, so it
+// is greyed out (DJUI paints a disabled interactable in grey and refuses the
+// click) rather than tapping into a no-op.
+//
+// Mods are not part of this decision any more. A romhack used to grey the switch
+// out because the pack could not tell a hack's strings from its own; it now
+// defers entry by entry (a name a mod installed stays, a dialog a mod wrote
+// stays -- see cn_text_gate.h), so the switch means the same thing with a
+// romhack enabled as without one.
 //
 // chinese_text_pack_init() applies the same rule at startup and rom_assets.c
 // applies it to the texture overlay; this function only makes the UI honest
@@ -81,7 +86,7 @@ static void djui_panel_misc_chinese_text_create(struct DjuiBase* body) {
     struct DjuiCheckbox* checkbox = djui_checkbox_create(body, DLANG(MISC, CHINESE_TEXT_PACK),
                                                          &configChineseText,
                                                          djui_panel_misc_chinese_text_changed);
-    if (checkbox == NULL || (cn_rom_assets_ready() && !gCnTextPackRomhack)) {
+    if (checkbox == NULL || cn_rom_assets_ready()) {
         return;
     }
 

@@ -10,6 +10,9 @@
 #include "save_file.h"
 #include "types.h"
 #include "game/cn_font.h"
+#if defined(SM64COOPDX_CN_TEXT)
+#include "game/cn_unicode.h"
+#endif
 #include "pc/lua/utils/smlua_level_utils.h"
 #include "pc/lua/utils/smlua_text_utils.h"
 
@@ -137,6 +140,7 @@ static const struct Sm64Char sSm64CharMap[] = {
     SM64_CHAR(">",   0x53, false), // right arrow
     SM64_CHAR("$",   0xF9, true ), // coin
     SM64_CHAR("★",   0xFA, true ), // star filled
+    SM64_CHAR("☆",   0xFD, true ), // star empty
     SM64_CHAR("@",   0xFA, true ), // star filled (both ★ and @ match 0xFA)
     SM64_CHAR("*",   0xFB, true ), // multiply
     SM64_CHAR("•",   0xFC, false), // interpunct (unused)
@@ -519,6 +523,33 @@ const u8 *get_level_name_sm64(s16 courseNum, s16 levelNum, s16 areaIndex, s16 ch
     static u8 output[256];
     char levelName[256];
     snprintf(levelName, 256, " %d %s", courseNum, get_level_name_ascii(courseNum, levelNum, areaIndex, charCase));
+#if defined(SM64COOPDX_CN_TEXT)
+    // A romhack's own level name is UTF-8: level_register()'s fullName, and the
+    // `name.value` copy every smlua_text_utils replacement keeps. The ASCII
+    // helper above is fine with that -- it only snprintf()s -- but the
+    // conversion below maps the bytes through the single-byte charmap, so a
+    // Chinese name reached the pause header and the act selector as garbage.
+    //
+    // Build the engine's text format instead (literal UTF-8, 0xFE line breaks,
+    // 0xFF terminator) and register it, which is exactly what
+    // cn_text_from_utf8() does for a mod's dialog. The CN renderers then draw
+    // the hack's own name, in either script, with the same font they use for
+    // the cartridge's names.
+    //
+    // Pure-ASCII names keep the old path byte for byte: vanilla names, an
+    // English romhack's names and the synthetic castle/ending names must not
+    // start travelling through the CN walker.
+    //
+    // `output` is one buffer serving both encodings, so the registration has to
+    // be dropped before the ASCII path touches it -- otherwise the next vanilla
+    // name would be walked as UTF-8.
+    cn_unregister_utf8_string(output);
+    if (gCnTextPackActive && cn_utf8_has_multibyte(levelName)) {
+        if (cn_utf8_to_engine(output, (s32) sizeof(output), levelName) >= 0) {
+            return output;
+        }
+    }
+#endif
     convert_string_ascii_to_sm64(output, levelName, false);
     return output;
 }
@@ -588,6 +619,17 @@ const char *get_star_name_ascii(s16 courseNum, s16 starNum, s16 charCase) {
 const u8 *get_star_name_sm64(s16 courseNum, s16 starNum, s16 charCase) {
     static u8 output[256];
     const char *starName = get_star_name_ascii(courseNum, starNum, charCase);
+#if defined(SM64COOPDX_CN_TEXT)
+    // Same rule as get_level_name_sm64(): a mod's act name is UTF-8, and the
+    // vanilla conversion would destroy it. This is the star name shown in the
+    // pause header, on the act selector and on the star-get screen.
+    cn_unregister_utf8_string(output);
+    if (gCnTextPackActive && cn_utf8_has_multibyte(starName)) {
+        if (cn_utf8_to_engine(output, (s32) sizeof(output), starName) >= 0) {
+            return output;
+        }
+    }
+#endif
     convert_string_ascii_to_sm64(output, starName, true);
     return output;
 }
