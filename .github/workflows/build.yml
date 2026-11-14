@@ -23,6 +23,11 @@ name: Build
 #   -p no   只编译，不打任何格式的包
 #   -po     只打包（跳过克隆/补丁/编译，直接吃上一步留下的 build-iquedx/upstream）
 #
+# 每个 job 只有四件事：装依赖 → 编译 → 打包 → 上传。**不在中间插任何离线测试**
+# （参数自测、workflow 表达式自测那一类）：它们跑的是仓库里的脚本，不是产物，
+# 放在流水线里只会让「编过一次」多等几分钟，而且失败信息远不如本机跑时清楚。
+# 需要这些检查时在本地手动执行，见 docs/LAYOUT.md 的「scripts/」一节。
+#
 # ⚠️ 产物名（artifact）不含变体标记：下载前先看 run 的「编译选项」日志行。
 #
 # 产物按格式拆成独立 artifact（不要一个几百 MB 的 zip 里套 dist/），名字里带架构，
@@ -87,18 +92,9 @@ jobs:
           sudo apt-get update
           # rpm 提供 rpmbuild；只给 -po -p all 的 rpm 分支用
           sudo apt-get install -y --no-install-recommends \
-            build-essential git python3 python3-yaml zip \
+            build-essential git python3 zip \
             libglew-dev libsdl2-dev libz-dev libcurl4-openssl-dev \
             rpm
-
-      - name: 参数自测（离线）
-        run: sh scripts/test_install_args.sh
-
-      # 编译选项是 workflow_dispatch 的输入拼出来的，这里按 GitHub 表达式的语义
-      # 把 7 种组合重新求值一遍（boolean 的 false 是假值、真分支不能写空串，
-      # 这两个坑改一行就可能踩回去）。缺 PyYAML 会自己跳过，不会把 job 弄红。
-      - name: 校验 workflow 编译选项（离线）
-        run: python3 scripts/check_workflow_inputs.py
 
       - name: 编译
         run: |
@@ -124,11 +120,6 @@ jobs:
               su builder -c "sh install.sh -po -p arch --path build-iquedx/upstream"
               chown -R "$HOST_UID:$HOST_GID" /w
             '
-
-      - name: 列出产物
-        run: |
-          echo "== 安装包 =="
-          ls -la ./*.deb ./*.rpm ./*.pkg.tar.* ./*.zip 2>/dev/null || true
 
       - name: 上传 .deb
         uses: actions/upload-artifact@v4
@@ -188,9 +179,6 @@ jobs:
             build-essential git python3 zip \
             libglew-dev libsdl2-dev libz-dev libcurl4-openssl-dev
 
-      - name: 参数自测（离线）
-        run: sh scripts/test_install_args.sh
-
       - name: 编译
         run: |
           echo "编译选项：${IQDX_BUILD_ARGS:-（无：原版 + 不带可选模块）}"
@@ -222,12 +210,13 @@ jobs:
               chown -R "$HOST_UID:$HOST_GID" /w
             '
 
-      - name: 列出产物
+      # 只做一处跟产物本身有关的断言：aarch64 打出来的 deb 架构字段得真的是 arm64
+      # （打包脚本里 suite/arch 是拼出来的字符串，写错只会产出个装不上的包）。
+      - name: 校验 .deb 架构
         run: |
-          echo "== 安装包 =="
-          ls -la ./*.deb ./*.pkg.tar.* ./*.zip 2>/dev/null || true
-          echo "== deb 架构字段 =="
-          dpkg-deb -f ./*.deb Architecture 2>/dev/null || true
+          arch=$(dpkg-deb -f ./*.deb Architecture)
+          echo "deb 架构字段：$arch"
+          test "$arch" = arm64
 
       - name: 上传 .deb
         uses: actions/upload-artifact@v4
@@ -299,9 +288,6 @@ jobs:
           "ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
           Write-Host "ISCC = $iscc"
 
-      - name: 参数自测（离线）
-        run: sh scripts/test_install_args.sh
-
       - name: 编译
         run: |
           echo "编译选项：${IQDX_BUILD_ARGS:-（无：原版 + 不带可选模块）}"
@@ -312,11 +298,6 @@ jobs:
       # 万一 ISCC 没找到，setup 分支只警告、zip 照出，不会整步失败。
       - name: 打包（安装向导 + 便携 zip）
         run: sh install.sh -po -p all --path build-iquedx/upstream
-
-      - name: 列出产物
-        run: |
-          ls -la dist | head -20 || true
-          ls -la ./*.exe ./*.zip 2>/dev/null || true
 
       # ISCC 编译通过只说明脚本语法没问题，装得对不对没人验。静默装到一个
       # 临时目录、检查主程序在不在、再静默卸掉 —— 三条都过了才算向导能用。
@@ -418,9 +399,6 @@ jobs:
           # `gmake: gcp: No such file or directory` 退 2。
           brew install make pkg-config sdl2 glew coreutils
 
-      - name: 参数自测（离线）
-        run: sh scripts/test_install_args.sh
-
       - name: 编译
         env:
           # Intel runner 的 brew 前缀是 /usr/local，两个都放上，别写死 /opt/homebrew
@@ -451,11 +429,6 @@ jobs:
 
       - name: 打包（app + dmg，含 ad-hoc 签名）
         run: sh install.sh -po -p all --path build-iquedx/upstream
-
-      - name: 列出产物
-        run: |
-          ls -la dist | head -20
-          ls -la ./*.dmg ./*.zip 2>/dev/null || true
 
       - name: 上传 .dmg
         uses: actions/upload-artifact@v4
@@ -515,9 +488,6 @@ jobs:
           echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
 
-      - name: 参数自测（离线）
-        run: sh scripts/test_install_args.sh
-
       # install.sh 内部顺序：make TOUCH_CONTROLS=1（生成资源）→ gradle assembleRelease → 收集 APK。
       - name: 编译 APK
         run: |
@@ -538,9 +508,6 @@ jobs:
             apksigner sign --key "$KEY" --cert "$CERT" "$apk"
             apksigner verify --print-certs "$apk" | head -3
           done
-
-      - name: 列出产物
-        run: ls -la dist
 
       - name: 上传
         uses: actions/upload-artifact@v4

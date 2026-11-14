@@ -1,5 +1,5 @@
 #!/bin/sh
-# install.sh 参数传递自测。
+# install.sh 参数传递自测（本地工具，CI 不跑）。
 #
 #   sh scripts/test_install_args.sh
 #
@@ -8,7 +8,9 @@
 #   B. 错误路径：缺值、值像选项、非法值、未知参数都必须非 0 退出
 #   C. 传播：参数是否真的传到 apply_patches.sh 与成品目录
 #
-# 退出码 0 = 全过。CI 里可以直接跑。
+# 退出码 0 = 全过。**只在本机手动跑**：流水线里不插离线测试（见 build.yml 顶部
+# 注释），所以改了 install.sh 的参数表之后要自己记得跑一遍，否则选项没接上的
+# 症状会变成「CI 编出来的是另一套配置」。
 set -u
 
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
