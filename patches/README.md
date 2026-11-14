@@ -199,3 +199,11 @@ python3 scripts/gen_platform_patches.py \
 语言字符串改了文案、或中文配置项改了名字时不用重生成任何补丁，只改 `scripts/add_lang_strings.sh` / `scripts/add_cn_config.sh` 里对应的常量。
 
 **手改 `0008-android.patch` 之后一定要跑 `python3 scripts/check_patch_integrity.py`。** 本机没有那两个 Android 基线时，第 2 步跑不了，改 PC 侧的 `pc_main.c` 往往只能手工同步到平台补丁里——而这里有两个不会在 PC 构建里暴露的坑：hunk 头里 `+c,d` 的计数忘了跟着改（`git apply` 报 corrupt patch，报错行号离真正出错的位置很远），以及删掉 `cn_extra/` 里某个头文件后平台补丁还留着 `#include`（PC 目标根本不走那个分支，Android CI 才炸）。这个脚本不需要任何基线就能把两种都拦住。
+
+**但它拦不住第三种：hunk 的上下文在上游里根本不存在。** 那一类的症状是 CI 跑到「4/6 应用补丁」直接 `0008-android.patch 无法干净应用，上游不是 upstream.txt 声明的基线？`，而本机 PC 构建一切正常（PC 目标压根不应用 `0008`）。只要网络可用，先跑一遍
+
+```bash
+sh scripts/preflight_android.sh android-cn --frontend
+```
+
+它按 `upstream.txt` 声明的 repo/commit 现拉一份浅克隆（临时目录默认 `/var/tmp`，可用 `PREFLIGHT_TMP` 覆盖——别用 `/tmp`，那常常是小容量 tmpfs），跑真实的 `apply_patches.sh`，跑完即删。`0008` 里每个文件的 hunk 都是按**真实基线**的上下文写的：`Android.mk` 的注入点是 `TOUCH_CONTROLS` 那段 `endif` 之后（两个 Android 上游这一带的 113 行文件逐字节相同），`Makefile` / `pc_main.c` 是三方合并出来的终态。上游改了这三个文件就得重跑第 2 步，不要手改 hunk。
