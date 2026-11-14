@@ -1,3 +1,5 @@
+[English](README.en.md) | **简体中文**
+
 # 补丁索引
 
 补丁**全部平铺在 `patches/` 下**，文件名 = 四位编号 + 分组 + 职责，**编号就是应用顺序**（`sort` 即顺序，脚本不另存一份列表）。分组只活在文件名里：可选组用前缀 glob 区分（`--frontend` → `0007-*.patch`，android → `0008-*.patch`），不再为可选补丁多套一层目录。
@@ -206,4 +208,4 @@ python3 scripts/gen_platform_patches.py \
 sh scripts/preflight_android.sh android-cn --frontend
 ```
 
-它按 `upstream.txt` 声明的 repo/commit 现拉一份浅克隆（临时目录默认 `/var/tmp`，可用 `PREFLIGHT_TMP` 覆盖——别用 `/tmp`，那常常是小容量 tmpfs），跑真实的 `apply_patches.sh`，跑完即删。`0008` 里每个文件的 hunk 都是按**真实基线**的上下文写的：`Android.mk` 的注入点是 `TOUCH_CONTROLS` 那段 `endif` 之后（两个 Android 上游这一带的 113 行文件逐字节相同），`Makefile` / `pc_main.c` 是三方合并出来的终态。上游改了这三个文件就得重跑第 2 步，不要手改 hunk。
+它按 `upstream.txt` 声明的 repo/commit 现拉一份浅克隆（临时目录默认 `/var/tmp`，可用 `PREFLIGHT_TMP` 覆盖——别用 `/tmp`，那常常是小容量 tmpfs），跑真实的 `apply_patches.sh`，跑完即删。`0008` 里每个文件的 hunk 都是按**真实基线**的上下文写的：`Android.mk` 的注入点紧接 `LOCAL_CFLAGS :=` 那一行之后（与生成器 `inject_android_mk()` 一致，两个 Android 上游这一带的 113 行文件逐字节相同），`Makefile` / `pc_main.c` 是三方合并出来的终态。上游改了这三个文件就得重跑第 2 步，不要手改 hunk。

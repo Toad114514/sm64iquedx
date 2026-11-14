@@ -1,3 +1,5 @@
+[English](README.en.md) | **简体中文**
+
 <div align="center">
 
 # sm64-iQueDeluxe
@@ -9,6 +11,7 @@
 <img alt="sm64coopdx" src="https://img.shields.io/badge/sm64coopdx-v1.5.1-1f6febe">
 <img alt="ique" src="https://img.shields.io/badge/iQue_Rom-Support-yellow">
 <img alt="Desktop" src="https://img.shields.io/badge/desktop-Windows%20%7C%20macOS%20%7C%20Linux-0078d4">
+<img alt="Static Badge" src="https://img.shields.io/badge/Support-Android-blue">
 <img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/toad114514/sm64iquedx">
 <img alt="GitHub forks" src="https://img.shields.io/github/forks/toad114514/sm64iquedx">
 
@@ -94,3 +97,5 @@ sh ./install.sh -a -c                     # 只构建 Android 汉化版 APK
 - `upstream.txt` —— 补丁基线（上游仓库 + commit）
 
 补丁索引与应用顺序见 [patches/README.md](patches/README.md)；改完 `src/` 用 `scripts/gen_all_patches.sh` 重生成共用补丁、`scripts/gen_platform_patches.py` 重生成 Android 补丁。不构建、只想手动叠加补丁时用 `scripts/apply_patches.sh <pc|android|android-cn> <上游目录> [--frontend]`，重复执行安全。约定详见 [docs/LAYOUT.md](docs/LAYOUT.md)。
+
+文档均提供中英双语：本页（[English](README.en.md)）、[patches/README](patches/README.md)（[English](patches/README.en.md)）、[docs/LAYOUT](docs/LAYOUT.md)（[English](docs/LAYOUT.en.md)）。两份内容必须同步改。

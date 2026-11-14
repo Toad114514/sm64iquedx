@@ -1,3 +1,5 @@
+[English](LAYOUT.en.md) | **简体中文**
+
 # 仓库布局
 
 本仓库只存放「源码改动 + 补丁 + 平台差异」，不存放上游 sm64coopdx 全量源码、也不存放任何 ROM。
@@ -12,9 +14,9 @@ patches/NNNN-分组-职责.patch  **全部平铺，文件名里的四位编号�
                       （语言字符串/配置项不是补丁，见 scripts/add_{lang_strings,cn_config}.sh）
 patches/cn_extra/     上游根本不存在的新增文件，完整副本，路径与上游逐级一致
 platform/             特定平台/发行包的补丁与构建脚本
-scripts/              生成补丁的辅助脚本 + 参数自测
-.github/workflows/    CI：桌面三平台 / Android 两条流水线
-docs/                 设计说明
+scripts/              生成补丁的辅助脚本 + 本地自测工具（CI 不跑）
+.github/workflows/    CI：一条 build.yml，五个 job（桌面三平台 + Android）
+docs/                 设计说明（LAYOUT.md 中文 / LAYOUT.en.md English）
 upstream.txt          补丁基于的上游仓库与 commit（唯一权威基线）
 ```
 
@@ -143,7 +145,7 @@ scripts/apply_patches.sh <pc|android|android-cn> <上游干净 checkout> [--fron
 | `gen_all_patches.sh <上游基线根目录>` | **改完 `src/` 后跑这个**，一次生成 `0001`~`0007` 全部分组，并断言「分组 == 全量差异」（无遗漏无重复） |
 | `gen_platform_patches.py --pc-base … --android … --android-cn …` | 重生成 `0008-android.patch`（两个上游共用一份），内含三方合并、冲突消解、两上游增量一致性断言与终态自检 |
 | `gen_patches.sh <上游根目录> [输出] [--only 前缀] [--exclude 前缀]` | 单个补丁生成器，按相对路径前缀筛选；`--only`/`--exclude` 可各重复多次（取并集） |
-| `test_install_args.sh` | `install.sh` 的参数自测：解析、错误路径、以及参数是否真的传到下游（桩掉 git/make/gradle，离线、不编译） |
+| `test_install_args.sh` | `install.sh` 的参数自测：解析、错误路径、以及参数是否真的传到下游（桩掉 git/make/gradle，离线、不编译）。**本地手动跑，CI 不跑** |
 | `check_patch_integrity.py` | 不需要任何上游基线：断言每个补丁的 `@@ -a,b +c,d @@` 与实际行数一致（手改 `0008-android.patch` 后最容易错的地方）、补丁里 `#include` 的 `cn_*.h` 都能在 `cn_extra/` 找到（删头文件后忘了改补丁的症状是「PC 编得过、Android CI 炸」）、`cn_extra/` 与分组补丁不重叠 |
 
 `gen_patches.sh` 的行为约定（已覆盖测试）：内容相同的文件跳过；`src/` 里有而基线上没有的文件直接报错（应改放 `patches/cn_extra/`）；含 NUL 字节的二进制直接报错（`diff` 对二进制只回一句「文件不同」且退出码仍为 1，不自己判会把这句话写进补丁）；筛不出差异时写一个空补丁文件而不是保留旧文件，应用器遇到空补丁会跳过。
@@ -288,9 +290,11 @@ sh platform/windows/mkexe.sh --check                  # 只探测 ISCC 在不在
 | `frontend` | 勾选（默认开） | `-f` → 额外应用 `0007-djui-frontend.patch`，「设置 → 其他」里出现中文字库开关 |
 | `djui_modern` | 勾选（默认开） | `-d` → 应用 djui_modern 模块（在 `0001`~`0006` 之前）。**只能配汉化版上游**：模块硬依赖汉化上游自带的 `src/pc/djui/cn_glyphs.h`，选「原版 + djui_modern」会被 `install.sh` 当场拒绝并提示 |
 
-拼装逻辑在 `build.yml` 的顶层 `env.IQDX_BUILD_ARGS`，五个 job 共用同一份结果；`scripts/check_workflow_inputs.py` 按 GitHub 表达式的语义把 7 种组合重新求值（boolean 的 `false` 是假值、真分支不能写空串，这两个坑改一行就可能踩回去）。产物名（artifact）不带变体标记，下载前看 run 里「编译选项」那行日志。
+拼装逻辑在 `build.yml` 的顶层 `env.IQDX_BUILD_ARGS`，五个 job 共用同一份结果。这里用的是 GitHub 表达式而不是 shell 判断，两个坑改一行就可能踩回去：boolean 的 `false` 是**假值**（`event.inputs` 的值永远是字符串，所以要用 `|| 默认值` 兜底），真分支不能写空串（`cond && '' || '-c'` 会被 `||` 吃掉）。改完在本机核对一下这七种组合的结果再提交。
 
-每个 job 第一步都是 `sh scripts/test_install_args.sh`，参数表一改就红，避免 CI 里才发现选项没接上。五个 job 共用一个 concurrency 组（`build-<ref>`），push 一次只跑一套，新 push 会把旧的一起取消。
+**流水线里不跑任何离线测试。** 每个 job 只有「装依赖 → 编译 → 打包 → 上传」，参数自测和 workflow 表达式自测都在本机手动跑（`scripts/test_install_args.sh` 见上表）。原因很实际：这些检查跑的是仓库里的脚本而不是产物，插在中间只会让「按一下按钮」多等几分钟，失败信息却远不如本机跑时清楚；真正需要在 CI 里挡的只有产物本身（`.deb` 架构字段、`.app` 不链回 brew、Windows 安装向导能装能卸）。
+
+五个 job 共用一个 concurrency 组（`build-<ref>`），push 一次只跑一套，新 push 会把旧的一起取消。
 
 **为什么拆成两次 `install.sh`**：GitHub 的 job 之间不共享工作区，只有 artifact。`-po/--package-only` 就是给「第二个 job 只有产物」准备的：跳过克隆/补丁/编译，直接吃 `--path` 指到的已编译树；没产物一律 `exit 255`（与打包出错的 1 区分）。
 
